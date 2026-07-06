@@ -4,6 +4,19 @@ VLC Sync
 Utility for synchronize multiple instances of VLC. Supports seek, play and pause/stop, playlist and volume sync. 
   
 
+## Blaufilter: Multi-Raspberry-Pi installation
+
+This fork adds **Blaufilter**, a system for synchronized fullscreen 4K video
+playback across multiple Raspberry Pi 4 devices (art installation setup):
+device 1 hosts a WiFi access point, a sync controller with sub-second drift
+correction, and a web UI (play/pause + playback speed slider).
+
+- Installation & operation guide: [deploy/README.md](./deploy/README.md)
+- New package: [`blaufilter/`](./blaufilter/) (controller, drift tracker, web UI)
+- The original `vlcsync` tool below is unchanged and keeps working as before.
+
+
+
 #### Motivation
 
 Strongly inspired by F1 streams with extra driver tracking data streams. Did [not find](#alternatives) reasonable alternative for Linux for playing several videos synchronously. So decided to write my own solution.

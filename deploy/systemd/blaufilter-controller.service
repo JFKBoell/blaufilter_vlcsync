@@ -1,0 +1,13 @@
+[Unit]
+Description=Blaufilter sync controller + web UI
+After=network-online.target NetworkManager.service
+Wants=network-online.target
+
+[Service]
+ExecStart=/opt/blaufilter/venv/bin/blaufilter-controller
+Restart=always
+RestartSec=3
+User=@USER@
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,15 @@
+[Unit]
+Description=Blaufilter VLC player (fullscreen, looped, RC interface on :4212)
+After=graphical-session.target
+PartOf=graphical-session.target
+
+[Service]
+# RC interface on 0.0.0.0 is acceptable: the AP network is isolated.
+ExecStart=/usr/bin/cvlc --extraintf lua --rc-host 0.0.0.0:4212 \
+    --fullscreen --loop --no-osd --no-video-title-show --no-random \
+    /opt/blaufilter/video/main.mp4
+Restart=always
+RestartSec=3
+
+[Install]
+WantedBy=graphical-session.target
