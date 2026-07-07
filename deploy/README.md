@@ -124,6 +124,24 @@ Schwellen sind in `/etc/blaufilter/config` übersteuerbar
   Sessions aktivieren `graphical-session.target` nicht zuverlässig. Dafür liegt
   ein Fallback in `~/.config/autostart/blaufilter-vlc.desktop`, der die Unit
   beim Desktop-Start anstößt. Prüfen mit `systemctl --user start blaufilter-vlc`.
+- **WLAN sichtbar, aber Verbinden schlägt fehl:** Bei bestehenden
+  Installationen die AP-Verschlüsselung auf reines WPA2/CCMP festnageln und
+  den DHCP-Unterbau sicherstellen (ab Script-Stand mit Kanal/CCMP-Pinning ist
+  das bereits Teil der Installation):
+
+  ```bash
+  sudo nmcli connection modify blaufilter-ap \
+      802-11-wireless.channel 6 \
+      wifi-sec.proto rsn wifi-sec.pairwise ccmp wifi-sec.group ccmp \
+      wifi-sec.pmf disable
+  sudo apt-get install -y dnsmasq-base
+  sudo nmcli connection up blaufilter-ap
+  sudo nmcli -s connection show blaufilter-ap | grep psk   # PSK-Tippfehler ausschließen?
+  ```
+
+  Verbindungsversuche live beobachten: auf dem Host
+  `sudo journalctl -u NetworkManager -f` laufen lassen, während sich ein
+  Client verbindet.
 - **Client taucht nicht auf:** WLAN prüfen (`nmcli device`), dann ob VLC lauscht:
   `nc -z 192.168.4.13 4212 && echo ok`.
 - **RC-Interface von Hand testen:** `nc 192.168.4.12 4212`, dann z. B.
