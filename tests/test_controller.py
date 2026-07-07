@@ -3,6 +3,7 @@ import time
 import pytest
 
 from vlcsync.vlc import VlcProcs
+from vlcsync.vlc_state import PlayState
 
 from blaufilter.config import BlaufilterConfig
 from blaufilter.controller import Controller
@@ -59,6 +60,13 @@ def slave_pairs(controller, servers):
             server = next(s for s in servers if s.port == vlc_id.port)
             result.append((server, device))
     return result
+
+
+def test_playstate_repr_is_always_str():
+    # PlayState.UNKNOWN.value is None; a non-string __repr__ crashed the
+    # DeviceView dataclass creation at import time on Python 3.11.2 (Bookworm)
+    for state in PlayState:
+        assert isinstance(repr(state), str)
 
 
 def test_new_devices_get_rate_and_play_state(stack):
