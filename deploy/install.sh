@@ -63,6 +63,23 @@ device_id = $BF_ID
 role = $BF_ROLE
 EOF
 
+BOOT_DIR=/boot/firmware
+[[ -d "$BOOT_DIR" ]] || BOOT_DIR=/boot
+if [[ ! -f "$BOOT_DIR/blaufilter.txt" ]]; then
+    echo "==> Writing $BOOT_DIR/blaufilter.txt (emergency override, editable from any PC)"
+    cat > "$BOOT_DIR/blaufilter.txt" <<'EOF'
+# Blaufilter Boot-Konfiguration (Notausstieg)
+# Diese Datei liegt auf der FAT-Boot-Partition und kann an jedem Computer
+# bearbeitet werden (SD-Karte einstecken). Aenderungen wirken ab dem
+# naechsten Boot.
+#
+# fullscreen=no  -> Video im Fenster statt Vollbild (Desktop bleibt erreichbar)
+# autostart=no   -> VLC startet gar nicht (System-Rettung)
+fullscreen=yes
+autostart=yes
+EOF
+fi
+
 echo "==> Setting hostname blaufilter-$BF_ID"
 hostnamectl set-hostname "blaufilter-$BF_ID"
 sed -i "s/^127\.0\.1\.1.*/127.0.1.1\tblaufilter-$BF_ID/" /etc/hosts || true

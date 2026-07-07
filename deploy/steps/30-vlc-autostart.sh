@@ -7,6 +7,9 @@ echo "==> [30-vlc-autostart] Desktop autologin + disable screen blanking"
 raspi-config nonint do_boot_behaviour B4
 raspi-config nonint do_blanking 1
 
+echo "==> [30-vlc-autostart] Installing VLC launcher"
+install -m 755 "$BF_REPO_DIR/deploy/blaufilter-start-vlc.sh" /opt/blaufilter/start-vlc.sh
+
 echo "==> [30-vlc-autostart] Installing blaufilter-vlc user unit for $BF_USER"
 USER_HOME="$(getent passwd "$BF_USER" | cut -d: -f6)"
 UNIT_DIR="$USER_HOME/.config/systemd/user"

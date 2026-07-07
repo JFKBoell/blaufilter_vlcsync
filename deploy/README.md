@@ -114,6 +114,21 @@ Mit dem WLAN `Blaufilter` verbinden und **http://192.168.4.1:8080** öffnen:
 Schwellen sind in `/etc/blaufilter/config` übersteuerbar
 (`drift_threshold`, `hysteresis_cycles`, `cooldown_s`, `rate_nudge`, `web_port`).
 
+## Notausstieg: `blaufilter.txt` auf der Boot-Partition
+
+Auf der FAT-Boot-Partition der SD-Karte (unter Linux `/boot/firmware/`) liegt
+`blaufilter.txt` — die Datei ist **an jedem Computer** editierbar: SD-Karte
+einstecken, Boot-Laufwerk öffnen, ändern, wieder booten.
+
+```
+fullscreen=yes   # no -> Video läuft im Fenster, Desktop bleibt bedienbar
+autostart=yes    # no -> VLC startet gar nicht (System-Rettung)
+```
+
+Änderungen wirken ab dem nächsten Boot (oder sofort per
+`systemctl --user restart blaufilter-vlc`). Damit kommt man immer wieder ins
+System, selbst wenn Tastatur/SSH nicht helfen.
+
 ## Fehlersuche
 
 - **Direkt am Gerät arbeiten, aber VLC ist im Vollbild:** `Esc` oder `f`

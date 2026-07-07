@@ -4,11 +4,12 @@ After=graphical-session.target
 PartOf=graphical-session.target
 
 [Service]
+# The launcher reads /boot/firmware/blaufilter.txt (fullscreen=..., autostart=...)
+# so playback can be disabled from any computer via the SD card's boot partition.
 # RC interface on 0.0.0.0 is acceptable: the AP network is isolated.
-ExecStart=/usr/bin/cvlc --extraintf lua --rc-host 0.0.0.0:4212 \
-    --fullscreen --loop --no-osd --no-video-title-show --no-random \
-    /opt/blaufilter/video/main.mp4
-Restart=always
+ExecStart=/opt/blaufilter/start-vlc.sh
+# on-failure (not always): with autostart=no the launcher exits 0 and must stay stopped
+Restart=on-failure
 RestartSec=3
 
 [Install]
