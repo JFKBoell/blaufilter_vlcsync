@@ -116,6 +116,13 @@ Schwellen sind in `/etc/blaufilter/config` übersteuerbar
 
 ## Fehlersuche
 
+- **Direkt am Gerät arbeiten, aber VLC ist im Vollbild:** `Esc` oder `f`
+  beendet das Vollbild (`Leertaste` pausiert), danach über die Taskleiste ein
+  Terminal öffnen. VLC stoppen: `systemctl --user stop blaufilter-vlc`
+  (ohne sudo; wegen `Restart=always` hilft killen/schließen allein nicht).
+  Empfehlung: einmalig `sudo systemctl enable --now ssh` — dann geht die
+  Administration jederzeit per SSH (`ssh <user>@192.168.4.1` im
+  Blaufilter-WLAN), egal was auf dem Bildschirm läuft.
 - **Läuft VLC?** `systemctl --user status blaufilter-vlc` (als Desktop-User).
 - **Läuft der Controller?** (Host) `sudo systemctl status blaufilter-controller`
   bzw. `journalctl -u blaufilter-controller -f` — dort stehen Geräte-Joins
