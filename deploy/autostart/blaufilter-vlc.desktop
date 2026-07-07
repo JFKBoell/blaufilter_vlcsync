@@ -1,0 +1,6 @@
+[Desktop Entry]
+Type=Application
+Name=Blaufilter VLC
+Comment=Fallback starter for the blaufilter-vlc user unit
+Exec=systemctl --user start blaufilter-vlc.service
+X-GNOME-Autostart-enabled=true

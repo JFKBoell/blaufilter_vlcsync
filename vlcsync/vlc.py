@@ -59,6 +59,15 @@ class Vlc:
     def seek(self, seek: int):
         self.vlc_conn.cmd(f"seek {seek}")
 
+    def set_rate(self, rate: float):
+        self.vlc_conn.cmd(f"rate {rate:.3f}")
+
+    def get_length(self) -> int | None:
+        length = self.vlc_conn.cmd("get_length")
+        if length.strip() != '':
+            return int(length)
+        return None
+
     def stop(self):
         self.vlc_conn.cmd("stop")
 

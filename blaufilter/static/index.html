@@ -1,0 +1,154 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Blaufilter Steuerung</title>
+<style>
+  :root { color-scheme: dark; }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    font-family: system-ui, sans-serif;
+    background: #0d1b2a; color: #e0e6ed;
+    display: flex; flex-direction: column; align-items: center;
+    min-height: 100vh; padding: 1.5rem; gap: 1.5rem;
+  }
+  h1 { font-size: 1.3rem; font-weight: 600; color: #7ab8f5; }
+  .card {
+    background: #16283d; border-radius: 12px; padding: 1.2rem;
+    width: 100%; max-width: 480px;
+  }
+  #playpause {
+    width: 100%; padding: 1.2rem; font-size: 1.5rem; font-weight: 700;
+    border: none; border-radius: 12px; cursor: pointer;
+    background: #2e7d32; color: white;
+  }
+  #playpause.playing { background: #b26a00; }
+  #playpause:active { filter: brightness(1.2); }
+  .rate-row { display: flex; align-items: center; gap: 0.8rem; margin-top: 0.5rem; }
+  input[type=range] { flex: 1; accent-color: #7ab8f5; height: 2rem; }
+  #rateval { font-variant-numeric: tabular-nums; font-size: 1.2rem; min-width: 4.5rem; text-align: right; }
+  label { font-size: 0.85rem; color: #8fa3b8; text-transform: uppercase; letter-spacing: 0.05em; }
+  table { width: 100%; border-collapse: collapse; margin-top: 0.5rem; }
+  th, td { text-align: left; padding: 0.4rem 0.5rem; font-size: 0.9rem; }
+  th { color: #8fa3b8; font-weight: 500; border-bottom: 1px solid #2a3f57; }
+  td { font-variant-numeric: tabular-nums; }
+  .drift-ok { color: #66bb6a; }
+  .drift-warn { color: #ffb74d; }
+  .drift-bad { color: #ef5350; }
+  .badge { font-size: 0.7rem; background: #7ab8f5; color: #0d1b2a; border-radius: 4px; padding: 0.1rem 0.3rem; margin-left: 0.3rem; }
+  #resync {
+    width: 100%; padding: 0.7rem; margin-top: 0.8rem; font-size: 1rem;
+    border: 1px solid #2a3f57; border-radius: 8px; cursor: pointer;
+    background: transparent; color: #7ab8f5;
+  }
+  #conn { font-size: 0.8rem; color: #8fa3b8; }
+  #conn.offline { color: #ef5350; }
+</style>
+</head>
+<body>
+  <h1>Blaufilter Videosteuerung</h1>
+
+  <div class="card">
+    <button id="playpause">…</button>
+  </div>
+
+  <div class="card">
+    <label for="rate">Geschwindigkeit</label>
+    <div class="rate-row">
+      <input type="range" id="rate" min="0.5" max="2.0" step="0.05" value="1.0">
+      <span id="rateval">1.00×</span>
+    </div>
+  </div>
+
+  <div class="card">
+    <label>Geräte</label>
+    <table>
+      <thead><tr><th>ID</th><th>Adresse</th><th>Position</th><th>Drift</th></tr></thead>
+      <tbody id="devices"><tr><td colspan="4">—</td></tr></tbody>
+    </table>
+    <button id="resync">Jetzt neu synchronisieren</button>
+  </div>
+
+  <div id="conn">verbinde…</div>
+
+<script>
+(function () {
+  const btn = document.getElementById('playpause');
+  const slider = document.getElementById('rate');
+  const rateval = document.getElementById('rateval');
+  const devicesEl = document.getElementById('devices');
+  const conn = document.getElementById('conn');
+  let playState = null;
+  let sliderBusy = false;
+
+  function fmtPos(sec) {
+    if (sec == null) return '—';
+    sec = Math.floor(sec);
+    const h = Math.floor(sec / 3600), m = Math.floor(sec % 3600 / 60), s = sec % 60;
+    return [h, m, s].map(v => String(v).padStart(2, '0')).join(':');
+  }
+
+  function driftCell(ms) {
+    if (ms == null) return '<td>—</td>';
+    const cls = Math.abs(ms) < 250 ? 'drift-ok' : Math.abs(ms) < 500 ? 'drift-warn' : 'drift-bad';
+    return `<td class="${cls}">${ms > 0 ? '+' : ''}${ms} ms</td>`;
+  }
+
+  function render(st) {
+    playState = st.play_state;
+    btn.textContent = playState === 'playing' ? '⏸ Pause' : '▶ Play';
+    btn.classList.toggle('playing', playState === 'playing');
+    if (!sliderBusy) {
+      slider.value = st.rate;
+      rateval.textContent = Number(st.rate).toFixed(2) + '×';
+    }
+    if (!st.devices.length) {
+      devicesEl.innerHTML = '<tr><td colspan="4">keine Geräte gefunden</td></tr>';
+      return;
+    }
+    devicesEl.innerHTML = st.devices.map(d =>
+      `<tr><td>${d.id ?? '?'}${d.is_master ? '<span class="badge">MASTER</span>' : ''}</td>` +
+      `<td>${d.address}</td><td>${fmtPos(d.position)}</td>` +
+      (d.is_master ? '<td>—</td>' : driftCell(d.drift_ms)) + '</tr>'
+    ).join('');
+  }
+
+  async function poll() {
+    try {
+      const r = await fetch('/api/status');
+      render(await r.json());
+      conn.textContent = 'verbunden';
+      conn.classList.remove('offline');
+    } catch (e) {
+      conn.textContent = 'keine Verbindung zum Controller';
+      conn.classList.add('offline');
+    }
+  }
+
+  btn.addEventListener('click', () => {
+    fetch(playState === 'playing' ? '/api/pause' : '/api/play', { method: 'POST' }).then(poll);
+  });
+
+  slider.addEventListener('input', () => {
+    sliderBusy = true;
+    rateval.textContent = Number(slider.value).toFixed(2) + '×';
+  });
+  slider.addEventListener('change', () => {
+    fetch('/api/rate', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ rate: Number(slider.value) })
+    }).finally(() => { sliderBusy = false; poll(); });
+  });
+
+  document.getElementById('resync').addEventListener('click', () => {
+    fetch('/api/resync', { method: 'POST' }).then(poll);
+  });
+
+  poll();
+  setInterval(poll, 1000);
+})();
+</script>
+</body>
+</html>
