@@ -153,17 +153,26 @@ System, selbst wenn Tastatur/SSH nicht helfen.
 
   ```bash
   sudo nmcli connection modify blaufilter-ap \
+      wifi-sec.wps-method disabled \
       802-11-wireless.channel 6 \
       wifi-sec.proto rsn wifi-sec.pairwise ccmp wifi-sec.group ccmp \
       wifi-sec.pmf disable
   sudo apt-get install -y dnsmasq-base
-  sudo nmcli connection up blaufilter-ap
+  sudo nmcli connection down blaufilter-ap; sudo nmcli connection up blaufilter-ap
   sudo nmcli -s connection show blaufilter-ap | grep psk   # PSK-Tippfehler ausschließen?
   ```
 
+  Typische Symptome: **Windows fragt nach einer PIN** statt nach dem
+  Passwort → der AP kündigt WPS an (`wps-method disabled` behebt das; im
+  Windows-Dialog funktioniert auch der Link „Stattdessen mit
+  Sicherheitsschlüssel verbinden"). Handys melden dann oft fälschlich
+  „falsches Passwort". Nach der Korrektur am Client das gespeicherte Netz
+  erst „vergessen", dann neu verbinden.
+
   Verbindungsversuche live beobachten: auf dem Host
-  `sudo journalctl -u NetworkManager -f` laufen lassen, während sich ein
-  Client verbindet.
+  `sudo journalctl -u wpa_supplicant -u NetworkManager -f` laufen lassen,
+  während sich ein Client verbindet — „invalid MIC" heißt: das Passwort
+  kommt tatsächlich falsch an.
 - **Client taucht nicht auf:** WLAN prüfen (`nmcli device`), dann ob VLC lauscht:
   `nc -z 192.168.4.13 4212 && echo ok`.
 - **RC-Interface von Hand testen:** `nc 192.168.4.12 4212`, dann z. B.
