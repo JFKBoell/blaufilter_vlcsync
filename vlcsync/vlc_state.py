@@ -31,7 +31,9 @@ class PlayState(Enum):
         return PlayState.UNKNOWN
 
     def __repr__(self):
-        return self.value
+        # Must always return str: UNKNOWN's value is None, and a non-string
+        # __repr__ crashes e.g. dataclass docstring generation on Python <=3.11.x
+        return str(self.value)
 
 
 @dataclass

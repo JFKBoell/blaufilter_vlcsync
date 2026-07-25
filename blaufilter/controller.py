@@ -24,6 +24,11 @@ NUDGE_DONE_DRIFT = 0.05
 
 @dataclass
 class DeviceView:
+    """Per-device sync state as seen by the controller.
+
+    (Explicit docstring also keeps dataclass creation away from repr()-ing the
+    field defaults on older Python patch levels — see PlayState.__repr__.)
+    """
     vlc: Vlc
     tracker: PositionTracker = field(default_factory=PositionTracker)
     length: Optional[int] = None

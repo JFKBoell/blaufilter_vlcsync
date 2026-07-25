@@ -10,7 +10,9 @@ apt-get install -y --no-install-recommends dnsmasq-base
 echo "==> [20-network-host] Configuring WiFi AP '$BF_SSID' on 192.168.4.1/24"
 # Security is pinned to plain WPA2/CCMP with PMF off and a fixed channel:
 # without this, NetworkManager may negotiate WPA1/TKIP mixed mode or
-# WPA3-transition/PMF, which many clients fail to join.
+# WPA3-transition/PMF, which many clients fail to join. WPS must be off,
+# otherwise the beacon advertises it and Windows asks for a PIN instead of
+# the password while some phones misreport "wrong password".
 nmcli connection delete blaufilter-ap 2>/dev/null || true
 nmcli connection add type wifi ifname wlan0 con-name blaufilter-ap autoconnect yes \
     ssid "$BF_SSID" \
@@ -23,6 +25,7 @@ nmcli connection add type wifi ifname wlan0 con-name blaufilter-ap autoconnect y
     wifi-sec.pairwise ccmp \
     wifi-sec.group ccmp \
     wifi-sec.pmf disable \
+    wifi-sec.wps-method disabled \
     ipv4.method shared \
     ipv4.addresses 192.168.4.1/24 \
     ipv6.method disabled
