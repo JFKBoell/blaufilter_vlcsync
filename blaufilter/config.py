@@ -18,7 +18,7 @@ class BlaufilterConfig:
     subnet: str = "192.168.4"
     rc_port: int = 4212
     max_devices: int = 6
-    web_port: int = 8080
+    web_port: int = 80
     drift_threshold: float = 0.5
     hysteresis_cycles: int = 3
     cooldown_s: float = 5.0

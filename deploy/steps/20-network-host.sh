@@ -30,3 +30,19 @@ nmcli connection add type wifi ifname wlan0 con-name blaufilter-ap autoconnect y
     ipv4.addresses 192.168.4.1/24 \
     ipv6.method disabled
 nmcli connection up blaufilter-ap
+
+echo "==> [20-network-host] Name resolution: blaufilter.local -> 192.168.4.1"
+# Windows/Android resolve via the DHCP-provided DNS (NM's shared dnsmasq)...
+install -d /etc/NetworkManager/dnsmasq-shared.d
+cat > /etc/NetworkManager/dnsmasq-shared.d/blaufilter.conf <<'EOF'
+address=/blaufilter.local/192.168.4.1
+EOF
+systemctl restart NetworkManager
+nmcli connection up blaufilter-ap || true
+
+# ...while Apple devices resolve .local exclusively via mDNS (avahi alias)
+apt-get install -y --no-install-recommends avahi-daemon avahi-utils
+install -m 644 "$BF_REPO_DIR/deploy/systemd/blaufilter-mdns-alias.service" /etc/systemd/system/
+systemctl daemon-reload
+systemctl enable blaufilter-mdns-alias
+systemctl restart blaufilter-mdns-alias

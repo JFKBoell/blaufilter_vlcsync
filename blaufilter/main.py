@@ -15,7 +15,7 @@ from blaufilter.web import create_app
 @click.command
 @click.option("--hosts", "hosts", default=None, metavar="<host:port,host:port,...>",
               help="Override the candidate list (dev mode), same as BLAUFILTER_HOSTS.")
-@click.option("--web-port", "web_port", type=int, default=None, help="Web UI port (default 8080).")
+@click.option("--web-port", "web_port", type=int, default=None, help="Web UI port (default 80).")
 @click.option("--rate-nudge", "rate_nudge", is_flag=True, default=None,
               help="Enable smooth rate-based drift correction for small drifts.")
 @click.option("--drift-threshold", "drift_threshold", type=float, default=None,

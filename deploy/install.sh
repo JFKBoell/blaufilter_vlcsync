@@ -21,6 +21,7 @@ export BF_ROLE=""
 export BF_SSID="Blaufilter"
 export BF_PSK="blaufilter"
 export BF_VIDEO=""
+export BF_SPLASH=""
 export BF_USER="${SUDO_USER:-pi}"
 WIFI_COUNTRY="DE"
 
@@ -31,6 +32,7 @@ while [[ $# -gt 0 ]]; do
         --ssid)         BF_SSID="$2"; shift 2 ;;
         --psk)          BF_PSK="$2"; shift 2 ;;
         --video)        BF_VIDEO="$2"; shift 2 ;;
+        --splash)       BF_SPLASH="$2"; shift 2 ;;
         --user)         BF_USER="$2"; shift 2 ;;
         --wifi-country) WIFI_COUNTRY="$2"; shift 2 ;;
         *) echo "Unknown option: $1" >&2; exit 1 ;;
@@ -97,11 +99,14 @@ bash "$SCRIPT_DIR/steps/30-vlc-autostart.sh"
 if [[ "$BF_ROLE" == "host" ]]; then
     bash "$SCRIPT_DIR/steps/40-controller.sh"
 fi
+if [[ -n "$BF_SPLASH" ]]; then
+    bash "$SCRIPT_DIR/steps/50-splash.sh"
+fi
 
 echo
 echo "==> Done. Reboot to start playback: sudo reboot"
 if [[ "$BF_ROLE" == "host" ]]; then
-    echo "    Web UI after reboot: http://192.168.4.1:8080 (join WiFi '$BF_SSID')"
+    echo "    Web UI after reboot: http://blaufilter.local (or http://192.168.4.1) — join WiFi '$BF_SSID'"
 fi
 if [[ -z "$BF_VIDEO" ]]; then
     echo "    NOTE: no --video given. Copy your video to /opt/blaufilter/video/main.mp4"
