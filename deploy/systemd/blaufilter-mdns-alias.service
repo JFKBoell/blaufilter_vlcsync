@@ -1,0 +1,13 @@
+[Unit]
+Description=Blaufilter mDNS alias (blaufilter.local -> 192.168.4.1)
+After=avahi-daemon.service network-online.target
+Wants=avahi-daemon.service
+
+[Service]
+# Apple devices resolve .local exclusively via mDNS; this publishes the alias
+ExecStart=/usr/bin/avahi-publish -a -R blaufilter.local 192.168.4.1
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

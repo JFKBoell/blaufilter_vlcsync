@@ -14,9 +14,9 @@ korrigiert den Drift aller Geräte und stellt die Web-Bedienoberfläche bereit.
    │ 192.168.4.1    │ 192.168.4.12    │ 192.168.4.13    │
    │ VLC :4212      │ VLC :4212       │ VLC :4212       │
    │ Controller     │                 │                 │
-   │ Web-UI :8080   │                 │                 │
+   │ Web-UI :80     │                 │                 │
    └────────────────┴─────────────────┴─────────────────┘
-          ▲ Handy/Laptop im WLAN → http://192.168.4.1:8080
+          ▲ Handy/Laptop im WLAN → http://blaufilter.local
 ```
 
 - **Geräteanzahl variabel:** Der Controller probt zyklisch alle 6 möglichen
@@ -70,7 +70,8 @@ sudo reboot
 
 Optionen: `--ssid` (Standard `Blaufilter`), `--psk` (min. 8 Zeichen, Standard
 `blaufilter` — **ändern!**), `--role host|client` (Standard: ID 1 = host),
-`--user` (Standard: der aufrufende Benutzer), `--wifi-country` (Standard `DE`).
+`--user` (Standard: der aufrufende Benutzer), `--wifi-country` (Standard `DE`),
+`--splash bild.png` (eigener Bootscreen, siehe unten).
 Ohne `--video` das Video später manuell nach `/opt/blaufilter/video/main.mp4`
 kopieren.
 
@@ -84,11 +85,31 @@ Das Script richtet ein:
 | WLAN-Client mit statischer IP | — | ✓ |
 | VLC-Autostart (User-Unit `blaufilter-vlc`, Vollbild, Loop, RC auf :4212) | ✓ | ✓ |
 | Controller + Web-UI (System-Unit `blaufilter-controller`) | ✓ | — |
+| Namensauflösung `blaufilter.local` (mDNS + DHCP-DNS) | ✓ | — |
 | Desktop-Autologin, Bildschirm-Blanking aus | ✓ | ✓ |
+| Eigener Bootscreen (nur mit `--splash`) | ✓ | ✓ |
+
+### Eigener Bootscreen
+
+Mit `--splash bild.png` ersetzt die Installation das Boot-Splash-Bild
+(Plymouth-Theme „pix"). **Empfohlene Auflösung: die native Auflösung des
+Displays** — bei 4K-Bildschirmen 3840×2160; 1920×1080 funktioniert ebenfalls
+und wird skaliert. Format: PNG. Das Original wird als
+`/usr/share/plymouth/themes/pix/splash.png.orig` gesichert (zum
+Wiederherstellen zurückkopieren und `sudo update-initramfs -u` ausführen).
+
+### Namensauflösung `blaufilter.local`
+
+Der Host beantwortet den Namen auf zwei Wegen: per **mDNS/Avahi**
+(Apple-Geräte lösen `.local` ausschließlich so auf) und per **DNS im
+DHCP-Server** des APs (Windows/Android). Das Web-UI lauscht auf Port 80,
+darum reicht `http://blaufilter.local` ohne Portangabe; `http://192.168.4.1`
+geht immer.
 
 ## Bedienung
 
-Mit dem WLAN `Blaufilter` verbinden und **http://192.168.4.1:8080** öffnen:
+Mit dem WLAN `Blaufilter` verbinden und **http://blaufilter.local** öffnen
+(Fallback, falls die Namensauflösung am Gerät klemmt: `http://192.168.4.1`):
 
 - **Play/Pause** — wirkt auf alle Geräte gleichzeitig.
 - **Geschwindigkeit** 0,5×–2,0× in 0,05er-Schritten.
@@ -173,6 +194,12 @@ System, selbst wenn Tastatur/SSH nicht helfen.
   `sudo journalctl -u wpa_supplicant -u NetworkManager -f` laufen lassen,
   während sich ein Client verbindet — „invalid MIC" heißt: das Passwort
   kommt tatsächlich falsch an.
+- **`blaufilter.local` wird nicht aufgelöst:** `http://192.168.4.1` geht
+  immer. Auf dem Host prüfen: `systemctl status blaufilter-mdns-alias`
+  (mDNS-Alias für Apple-Geräte) und ob
+  `/etc/NetworkManager/dnsmasq-shared.d/blaufilter.conf` existiert
+  (DNS für Windows/Android; greift erst nach `systemctl restart NetworkManager`
+  und neuem DHCP-Lease am Client).
 - **Client taucht nicht auf:** WLAN prüfen (`nmcli device`), dann ob VLC lauscht:
   `nc -z 192.168.4.13 4212 && echo ok`.
 - **RC-Interface von Hand testen:** `nc 192.168.4.12 4212`, dann z. B.
