@@ -3,6 +3,7 @@ from __future__ import annotations
 import threading
 
 import click
+from waitress import serve
 
 from vlcsync.vlc import VlcProcs
 
@@ -42,11 +43,12 @@ def main(hosts, web_port, rate_nudge, drift_threshold, config_path):
 
     app = create_app(controller)
     web_thread = threading.Thread(
-        target=lambda: app.run(host="0.0.0.0", port=cfg.web_port, threaded=True),
+        target=lambda: serve(app, host="0.0.0.0", port=cfg.web_port, threads=8),
         daemon=True,
+        name="blaufilter-web",
     )
     web_thread.start()
-    print(f"  Web UI on http://0.0.0.0:{cfg.web_port}", flush=True)
+    print(f"  Web UI (waitress) on http://0.0.0.0:{cfg.web_port}", flush=True)
 
     try:
         controller.run()

@@ -96,6 +96,7 @@ else
     bash "$SCRIPT_DIR/steps/20-network-client.sh"
 fi
 bash "$SCRIPT_DIR/steps/30-vlc-autostart.sh"
+bash "$SCRIPT_DIR/steps/35-agent.sh"
 if [[ "$BF_ROLE" == "host" ]]; then
     bash "$SCRIPT_DIR/steps/40-controller.sh"
 fi

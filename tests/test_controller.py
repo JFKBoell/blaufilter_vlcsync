@@ -172,3 +172,22 @@ def test_pause_and_play_fan_out(stack):
 
     controller.play()
     assert all(p.state == "playing" for p in players)
+
+
+def test_restart_playback_seeks_all_to_zero(stack):
+    players = [
+        EmulatedPlayer(length=3600, start_position=90),
+        EmulatedPlayer(length=3600, start_position=95),
+    ]
+    servers, controller = stack(players)
+
+    assert tick_until(controller, lambda: len(controller.devices) == 2)
+    controller.restart_playback()
+    for player in players:
+        assert any(c.startswith("seek 0") for c in player.seeks_received())
+        assert int(player.position()) < 2
+
+    snap = controller.status_snapshot()
+    assert snap["connected_devices"] == 2
+    assert snap["expected_devices"] == 2
+    assert snap["health"] in ("ok", "degraded")

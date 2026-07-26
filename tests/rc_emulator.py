@@ -110,8 +110,8 @@ class EmulatedPlayer:
 
 class _RcHandler(socketserver.StreamRequestHandler):
     def handle(self):
-        # vlcsync sets a 0.5s global default socket timeout on import; the RC
-        # connection must survive arbitrary idle periods like real VLC does.
+        # Idle-tolerant like real VLC; connect/recv timeouts are set per-client
+        # socket in VlcSocket (no process-wide socket.setdefaulttimeout).
         self.connection.settimeout(None)
         self.wfile.write(b"> ")
         while True:

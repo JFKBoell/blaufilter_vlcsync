@@ -3,7 +3,7 @@ from __future__ import annotations
 import threading
 import time
 from dataclasses import dataclass, field
-from typing import Dict, Optional
+from typing import Dict, List, Optional
 
 from loguru import logger
 
@@ -13,6 +13,8 @@ from vlcsync.vlc_state import PlayState, VlcId
 
 from blaufilter.config import BlaufilterConfig, clamp_rate
 from blaufilter.tracker import PositionTracker, modular_diff
+from blaufilter import video_ops
+from blaufilter import distribute as video_distribute
 
 TICK_INTERVAL = 0.1
 PLAYSTATE_POLL_EVERY_N_TICKS = 10
@@ -20,6 +22,8 @@ LOOP_BOUNDARY_GRACE_S = 3.0
 NUDGE_FACTOR = 0.03
 NUDGE_MIN_DRIFT = 0.15
 NUDGE_DONE_DRIFT = 0.05
+DRIFT_WARN_MS = 250
+DRIFT_BAD_MS = 500
 
 
 @dataclass
@@ -60,6 +64,10 @@ class Controller:
         self.devices: Dict[VlcId, DeviceView] = {}
         self._tick_count = 0
         self.closed = False
+        self.started_at = time.time()
+        self.last_video_job: Optional[dict] = None
+        self._video_job_lock = threading.Lock()
+        self._video_busy = False
 
     # ------------------------------------------------------------------ loop
 
@@ -283,12 +291,199 @@ class Controller:
                 except VlcConnectionError:
                     self._drop_device(vlc_id)
 
+    def restart_playback(self):
+        """Seek all connected players to 0 and apply the desired play state.
+
+        This does not restart the VLC process — only resets the timeline.
+        """
+        with self.lock:
+            now = time.time()
+            for vlc_id, device in list(self.devices.items()):
+                try:
+                    if device.nudging:
+                        device.vlc.set_rate(self.desired_rate)
+                        device.applied_rate = self.desired_rate
+                        device.nudging = False
+                    device.vlc.seek(0)
+                    device.tracker.reset()
+                    device.over_threshold_count = 0
+                    device.cooldown_until = now + self.cfg.cooldown_s
+                    device.last_correction_at = now
+                    device.last_drift = 0.0
+                    self._apply_play_state(device)
+                except VlcConnectionError:
+                    self._drop_device(vlc_id)
+
+    def _video_info(self) -> dict:
+        return video_ops.video_info(self.cfg.video_path)
+
+    def video_job_busy(self) -> bool:
+        return self._video_busy
+
+    def ingest_video_stream(self, stream, activate: bool = True) -> dict:
+        """Replace local video, push to peer agents, optionally restart VLC everywhere."""
+        with self._video_job_lock:
+            if self._video_busy:
+                raise RuntimeError("video job already running")
+            self._video_busy = True
+
+        job = {
+            "phase": "saving",
+            "started_at": time.time(),
+            "finished_at": None,
+            "ok": False,
+            "local": None,
+            "distribute": [],
+            "activate": [],
+            "error": None,
+        }
+        self.last_video_job = job
+        try:
+            local = video_ops.atomic_replace_from_stream(self.cfg.video_path, stream)
+            job["local"] = local
+            job["phase"] = "distributing"
+            self_ip = self.cfg.ip_for_id(self.cfg.device_id)
+            # Always record host as local success without HTTP round-trip
+            host_row = {
+                "address": self_ip,
+                "id": self.cfg.device_id,
+                "ok": True,
+                "video": local,
+                "message": "local",
+                "local": True,
+            }
+            peers = video_distribute.distribute_video(
+                self.cfg, self.cfg.video_path, skip_ips=[self_ip]
+            )
+            job["distribute"] = [host_row] + peers
+            if activate:
+                job["phase"] = "activating"
+                job["activate"] = video_distribute.activate_playback(self.cfg)
+            job["ok"] = bool(local.get("present")) and all(
+                r.get("ok") for r in job["distribute"]
+            ) and (not activate or all(r.get("ok") for r in job["activate"]))
+            job["phase"] = "done"
+            return job
+        except Exception as e:
+            job["error"] = str(e)
+            job["phase"] = "error"
+            job["ok"] = False
+            raise
+        finally:
+            job["finished_at"] = time.time()
+            self.last_video_job = job
+            with self._video_job_lock:
+                self._video_busy = False
+
+    def activate_video(self) -> dict:
+        with self._video_job_lock:
+            if self._video_busy:
+                raise RuntimeError("video job already running")
+            self._video_busy = True
+        job = {
+            "phase": "activating",
+            "started_at": time.time(),
+            "finished_at": None,
+            "ok": False,
+            "activate": [],
+            "error": None,
+        }
+        self.last_video_job = job
+        try:
+            job["activate"] = video_distribute.activate_playback(self.cfg)
+            job["ok"] = all(r.get("ok") for r in job["activate"])
+            job["phase"] = "done"
+            return job
+        except Exception as e:
+            job["error"] = str(e)
+            job["phase"] = "error"
+            job["ok"] = False
+            raise
+        finally:
+            job["finished_at"] = time.time()
+            self.last_video_job = job
+            with self._video_job_lock:
+                self._video_busy = False
+
+    def _candidate_rows(self, connected_by_addr: Dict[str, dict]) -> List[dict]:
+        rows = []
+        for addr, port in self.cfg.candidate_addresses():
+            key = f"{addr}:{port}"
+            if key in connected_by_addr:
+                rows.append(connected_by_addr[key])
+                continue
+            rows.append({
+                "id": self.cfg.id_for_ip(addr),
+                "address": key,
+                "connected": False,
+                "is_master": False,
+                "position": None,
+                "drift_ms": None,
+                "play_state": None,
+                "last_correction_at": None,
+                "length": None,
+            })
+        known = {r["address"] for r in rows}
+        for addr_key, row in connected_by_addr.items():
+            if addr_key not in known:
+                rows.append(row)
+        rows.sort(key=lambda d: (d["id"] is None, d["id"] or 0, d["address"]))
+        return rows
+
+    def _health_and_issues(
+        self,
+        *,
+        connected: int,
+        expected: int,
+        devices: List[dict],
+        video: dict,
+        video_length: Optional[int],
+    ) -> tuple[str, List[str]]:
+        issues: List[str] = []
+        if video.get("checked") and not video.get("present"):
+            issues.append(f"Video-Datei fehlt: {video.get('path')}")
+        if expected > 0 and connected == 0:
+            issues.append("Kein VLC-Gerät verbunden")
+        elif expected > 0 and connected < expected:
+            issues.append(f"Nur {connected} von {expected} erwarteten Geräten online")
+
+        if connected > 0 and not video_length:
+            issues.append("Master meldet keine Videolänge (Medium fehlt in VLC?)")
+
+        bad_drift = [
+            d for d in devices
+            if d.get("connected") and not d.get("is_master")
+            and d.get("drift_ms") is not None and abs(d["drift_ms"]) >= DRIFT_BAD_MS
+        ]
+        if bad_drift:
+            issues.append(f"{len(bad_drift)} Gerät(e) mit Drift ≥ {DRIFT_BAD_MS} ms")
+        else:
+            warn_drift = [
+                d for d in devices
+                if d.get("connected") and not d.get("is_master")
+                and d.get("drift_ms") is not None and abs(d["drift_ms"]) >= DRIFT_WARN_MS
+            ]
+            if warn_drift:
+                issues.append(
+                    f"{len(warn_drift)} Gerät(e) mit Drift ≥ {DRIFT_WARN_MS} ms"
+                )
+
+        if expected > 0 and connected == 0:
+            return "offline", issues
+        if issues:
+            return "degraded", issues
+        return "ok", []
+
     def status_snapshot(self) -> dict:
         with self.lock:
             master_id = self._pick_master()
-            devices = []
+            connected_by_addr: Dict[str, dict] = {}
+            last_correction_at = None
             for vlc_id, device in self.devices.items():
-                devices.append({
+                if device.last_correction_at is not None:
+                    if last_correction_at is None or device.last_correction_at > last_correction_at:
+                        last_correction_at = device.last_correction_at
+                row = {
                     "id": self.cfg.id_for_ip(vlc_id.addr),
                     "address": f"{vlc_id.addr}:{vlc_id.port}",
                     "connected": True,
@@ -297,13 +492,37 @@ class Controller:
                     "drift_ms": None if device.last_drift is None else round(device.last_drift * 1000),
                     "play_state": device.play_state.value,
                     "last_correction_at": device.last_correction_at,
-                })
-            devices.sort(key=lambda d: d["address"])
+                    "length": device.length,
+                }
+                connected_by_addr[row["address"]] = row
+
+            devices = self._candidate_rows(connected_by_addr)
             master = self.devices.get(master_id) if master_id else None
+            video = self._video_info()
+            expected = len(self.cfg.candidate_addresses())
+            connected = len(self.devices)
+            video_length = master.length if master else None
+            health, issues = self._health_and_issues(
+                connected=connected,
+                expected=expected,
+                devices=devices,
+                video=video,
+                video_length=video_length,
+            )
+
             return {
                 "play_state": self.desired_play_state.value,
                 "rate": self.desired_rate,
-                "video_length": master.length if master else None,
+                "video_length": video_length,
                 "master": f"{master_id.addr}:{master_id.port}" if master_id else None,
                 "devices": devices,
+                "health": health,
+                "issues": issues,
+                "expected_devices": expected,
+                "connected_devices": connected,
+                "video": video,
+                "last_correction_at": last_correction_at,
+                "uptime_s": round(time.time() - self.started_at, 1),
+                "video_busy": self._video_busy,
+                "last_video_job": self.last_video_job,
             }

@@ -11,13 +11,14 @@
     font-family: system-ui, sans-serif;
     background: #0d1b2a; color: #e0e6ed;
     display: flex; flex-direction: column; align-items: center;
-    min-height: 100vh; padding: 1.5rem; gap: 1.5rem;
+    min-height: 100vh; padding: 1.5rem; gap: 1.2rem;
   }
   h1 { font-size: 1.3rem; font-weight: 600; color: #7ab8f5; }
   .card {
     background: #16283d; border-radius: 12px; padding: 1.2rem;
-    width: 100%; max-width: 480px;
+    width: 100%; max-width: 520px;
   }
+  .card + .card { }
   #playpause {
     width: 100%; padding: 1.2rem; font-size: 1.5rem; font-weight: 700;
     border: none; border-radius: 12px; cursor: pointer;
@@ -33,21 +34,100 @@
   th, td { text-align: left; padding: 0.4rem 0.5rem; font-size: 0.9rem; }
   th { color: #8fa3b8; font-weight: 500; border-bottom: 1px solid #2a3f57; }
   td { font-variant-numeric: tabular-nums; }
+  tr.offline td { color: #6b7c8f; }
   .drift-ok { color: #66bb6a; }
   .drift-warn { color: #ffb74d; }
   .drift-bad { color: #ef5350; }
-  .badge { font-size: 0.7rem; background: #7ab8f5; color: #0d1b2a; border-radius: 4px; padding: 0.1rem 0.3rem; margin-left: 0.3rem; }
-  #resync {
-    width: 100%; padding: 0.7rem; margin-top: 0.8rem; font-size: 1rem;
+  .badge {
+    font-size: 0.7rem; background: #7ab8f5; color: #0d1b2a;
+    border-radius: 4px; padding: 0.1rem 0.3rem; margin-left: 0.3rem;
+  }
+  .badge-off {
+    font-size: 0.7rem; background: #2a3f57; color: #8fa3b8;
+    border-radius: 4px; padding: 0.1rem 0.3rem; margin-left: 0.3rem;
+  }
+  .actions { display: flex; flex-direction: column; gap: 0.5rem; margin-top: 0.8rem; }
+  .actions button {
+    width: 100%; padding: 0.7rem; font-size: 1rem;
     border: 1px solid #2a3f57; border-radius: 8px; cursor: pointer;
     background: transparent; color: #7ab8f5;
   }
+  .actions button:active { filter: brightness(1.2); }
   #conn { font-size: 0.8rem; color: #8fa3b8; }
   #conn.offline { color: #ef5350; }
+  .health {
+    display: flex; flex-wrap: wrap; gap: 0.6rem; align-items: center;
+    justify-content: space-between;
+  }
+  .pill {
+    display: inline-block; font-size: 0.8rem; font-weight: 600;
+    border-radius: 999px; padding: 0.25rem 0.7rem; text-transform: uppercase;
+    letter-spacing: 0.04em;
+  }
+  .pill-ok { background: #1b4332; color: #66bb6a; }
+  .pill-degraded { background: #4a3700; color: #ffb74d; }
+  .pill-offline { background: #4a1515; color: #ef5350; }
+  .stats {
+    display: grid; grid-template-columns: 1fr 1fr; gap: 0.6rem; margin-top: 0.9rem;
+  }
+  .stat {
+    background: #0d1b2a; border-radius: 8px; padding: 0.7rem 0.8rem;
+  }
+  .stat .k { font-size: 0.75rem; color: #8fa3b8; text-transform: uppercase; }
+  .stat .v { font-size: 1.15rem; font-variant-numeric: tabular-nums; margin-top: 0.15rem; }
+  #issues {
+    margin-top: 0.8rem; padding: 0.7rem 0.8rem; border-radius: 8px;
+    background: #4a1515; color: #ffcdd2; font-size: 0.9rem;
+    display: none;
+  }
+  #issues.visible { display: block; }
+  #issues ul { margin: 0.4rem 0 0 1.1rem; }
+  #issues li { margin: 0.2rem 0; }
+  .meta { font-size: 0.8rem; color: #8fa3b8; margin-top: 0.7rem; line-height: 1.4; }
+  .hint {
+    margin-top: 0.6rem; font-size: 0.75rem; color: #6b7c8f; line-height: 1.35;
+  }
+  .upload-row {
+    display: flex; flex-direction: column; gap: 0.6rem; margin-top: 0.5rem;
+  }
+  .upload-row input[type=file] {
+    width: 100%; font-size: 0.9rem; color: #e0e6ed;
+  }
+  .check {
+    display: flex; align-items: center; gap: 0.5rem; font-size: 0.9rem; color: #c5d4e3;
+    text-transform: none; letter-spacing: 0;
+  }
+  #uploadbtn {
+    width: 100%; padding: 0.7rem; font-size: 1rem;
+    border: none; border-radius: 8px; cursor: pointer;
+    background: #1b4f72; color: #e0e6ed; font-weight: 600;
+  }
+  #uploadbtn:disabled { opacity: 0.5; cursor: wait; }
+  #videostatus {
+    margin-top: 0.7rem; font-size: 0.85rem; color: #8fa3b8; line-height: 1.4;
+  }
+  #videostatus table { margin-top: 0.4rem; }
+  .ok { color: #66bb6a; }
+  .fail { color: #ef5350; }
 </style>
 </head>
 <body>
   <h1>Blaufilter Videosteuerung</h1>
+
+  <div class="card" id="ops">
+    <div class="health">
+      <span id="healthpill" class="pill pill-offline">…</span>
+      <span id="healthlabel" style="font-size:0.9rem;color:#8fa3b8">Status</span>
+    </div>
+    <div class="stats">
+      <div class="stat"><div class="k">Geräte</div><div class="v" id="devcount">—</div></div>
+      <div class="stat"><div class="k">Letzte Korrektur</div><div class="v" id="lastcorr">—</div></div>
+      <div class="stat"><div class="k">Videolänge</div><div class="v" id="vidlen">—</div></div>
+      <div class="stat"><div class="k">Controller</div><div class="v" id="uptime">—</div></div>
+    </div>
+    <div id="issues"></div>
+    <div class="meta" id="videometa">Video: …</div>
+  </div>
 
   <div class="card">
     <button id="playpause">…</button>
@@ -62,12 +142,36 @@
   </div>
 
   <div class="card">
+    <label>Video austauschen</label>
+    <div class="upload-row">
+      <input type="file" id="videofile" accept="video/*,.mp4,.mkv,.mov">
+      <label class="check">
+        <input type="checkbox" id="activatevlc" checked>
+        Nach Upload VLC auf allen Geräten neu starten
+      </label>
+      <button type="button" id="uploadbtn">Video verteilen</button>
+    </div>
+    <div id="videostatus"></div>
+    <p class="hint">
+      Ersetzt <code>/opt/blaufilter/video/main.mp4</code> auf dem Host und kopiert die Datei
+      per WLAN an alle Clients. 4K-Dateien über 2,4‑GHz-WLAN können mehrere Minuten dauern.
+    </p>
+  </div>
+
+  <div class="card">
     <label>Geräte</label>
     <table>
       <thead><tr><th>ID</th><th>Adresse</th><th>Position</th><th>Drift</th></tr></thead>
       <tbody id="devices"><tr><td colspan="4">—</td></tr></tbody>
     </table>
-    <button id="resync">Jetzt neu synchronisieren</button>
+    <div class="actions">
+      <button id="resync">Jetzt neu synchronisieren</button>
+      <button id="restart">Wiedergabe von vorn</button>
+    </div>
+    <p class="hint">
+      „Von vorn“ setzt nur die Position auf 0. Ein vollständiger VLC-Neustart passiert
+      automatisch beim Video-Austausch (Checkbox oben).
+    </p>
   </div>
 
   <div id="conn">verbinde…</div>
@@ -79,8 +183,20 @@
   const rateval = document.getElementById('rateval');
   const devicesEl = document.getElementById('devices');
   const conn = document.getElementById('conn');
+  const healthpill = document.getElementById('healthpill');
+  const healthlabel = document.getElementById('healthlabel');
+  const issuesEl = document.getElementById('issues');
+  const uploadbtn = document.getElementById('uploadbtn');
+  const videostatus = document.getElementById('videostatus');
   let playState = null;
   let sliderBusy = false;
+  let uploading = false;
+
+  const HEALTH = {
+    ok: { pill: 'pill-ok', text: 'OK', label: 'Synchron' },
+    degraded: { pill: 'pill-degraded', text: 'Eingeschränkt', label: 'Achtung' },
+    offline: { pill: 'pill-offline', text: 'Offline', label: 'Keine Geräte' },
+  };
 
   function fmtPos(sec) {
     if (sec == null) return '—';
@@ -89,10 +205,62 @@
     return [h, m, s].map(v => String(v).padStart(2, '0')).join(':');
   }
 
+  function fmtAgo(ts) {
+    if (ts == null) return '—';
+    const sec = Math.max(0, Math.floor(Date.now() / 1000 - ts));
+    if (sec < 5) return 'gerade eben';
+    if (sec < 60) return `vor ${sec}s`;
+    if (sec < 3600) return `vor ${Math.floor(sec / 60)} min`;
+    return `vor ${Math.floor(sec / 3600)} h`;
+  }
+
+  function fmtUptime(sec) {
+    if (sec == null) return '—';
+    sec = Math.floor(sec);
+    if (sec < 60) return sec + 's';
+    if (sec < 3600) return Math.floor(sec / 60) + ' min';
+    const h = Math.floor(sec / 3600), m = Math.floor((sec % 3600) / 60);
+    return h + 'h ' + m + 'm';
+  }
+
+  function fmtBytes(n) {
+    if (n == null) return '';
+    if (n < 1024) return n + ' B';
+    if (n < 1048576) return (n / 1024).toFixed(0) + ' KB';
+    if (n < 1073741824) return (n / 1048576).toFixed(1) + ' MB';
+    return (n / 1073741824).toFixed(2) + ' GB';
+  }
+
   function driftCell(ms) {
     if (ms == null) return '<td>—</td>';
     const cls = Math.abs(ms) < 250 ? 'drift-ok' : Math.abs(ms) < 500 ? 'drift-warn' : 'drift-bad';
     return `<td class="${cls}">${ms > 0 ? '+' : ''}${ms} ms</td>`;
+  }
+
+  function renderJob(job) {
+    if (!job) {
+      if (!uploading) videostatus.textContent = '';
+      return;
+    }
+    const phase = job.phase || '';
+    let html = `<div>Letzter Job: <strong>${phase}</strong>` +
+      (job.ok ? ' <span class="ok">OK</span>' : ' <span class="fail">Fehler</span>') + '</div>';
+    if (job.error) html += `<div class="fail">${job.error}</div>`;
+    const rows = (job.distribute || []).concat(
+      (job.activate || []).map(r => Object.assign({kind: 'vlc'}, r))
+    );
+    if (rows.length) {
+      html += '<table><thead><tr><th>Gerät</th><th>Status</th><th>Detail</th></tr></thead><tbody>';
+      html += rows.map(r => {
+        const detail = r.error || r.message || (r.video && r.video.fingerprint) || '';
+        const label = r.kind === 'vlc' ? 'VLC' : 'Datei';
+        return `<tr><td>${r.id ?? '?'} ${r.address || ''}</td>` +
+          `<td class="${r.ok ? 'ok' : 'fail'}">${label}: ${r.ok ? 'ok' : 'fail'}</td>` +
+          `<td>${detail}</td></tr>`;
+      }).join('');
+      html += '</tbody></table>';
+    }
+    videostatus.innerHTML = html;
   }
 
   function render(st) {
@@ -103,26 +271,76 @@
       slider.value = st.rate;
       rateval.textContent = Number(st.rate).toFixed(2) + '×';
     }
-    if (!st.devices.length) {
-      devicesEl.innerHTML = '<tr><td colspan="4">keine Geräte gefunden</td></tr>';
+
+    const h = HEALTH[st.health] || HEALTH.offline;
+    healthpill.className = 'pill ' + h.pill;
+    healthpill.textContent = h.text;
+    healthlabel.textContent = h.label;
+
+    document.getElementById('devcount').textContent =
+      `${st.connected_devices ?? 0} / ${st.expected_devices ?? '—'}`;
+    document.getElementById('lastcorr').textContent = fmtAgo(st.last_correction_at);
+    document.getElementById('vidlen').textContent = fmtPos(st.video_length);
+    document.getElementById('uptime').textContent = fmtUptime(st.uptime_s);
+
+    const issues = st.issues || [];
+    if (issues.length) {
+      issuesEl.classList.add('visible');
+      issuesEl.innerHTML = '<strong>Hinweise</strong><ul>' +
+        issues.map(i => `<li>${i}</li>`).join('') + '</ul>';
+    } else {
+      issuesEl.classList.remove('visible');
+      issuesEl.innerHTML = '';
+    }
+
+    const v = st.video || {};
+    if (!v.checked) {
+      document.getElementById('videometa').textContent = 'Video: Prüfung deaktiviert';
+    } else if (!v.present) {
+      document.getElementById('videometa').textContent =
+        'Video fehlt: ' + (v.path || '—');
+    } else {
+      const parts = [v.path, fmtBytes(v.size_bytes)];
+      if (v.fingerprint) parts.push('ID ' + v.fingerprint);
+      document.getElementById('videometa').textContent = 'Video: ' + parts.filter(Boolean).join(' · ');
+    }
+
+    if (!uploading) renderJob(st.last_video_job);
+
+    uploadbtn.disabled = uploading || !!st.video_busy;
+
+    const rows = st.devices || [];
+    if (!rows.length) {
+      devicesEl.innerHTML = '<tr><td colspan="4">keine Kandidaten konfiguriert</td></tr>';
       return;
     }
-    devicesEl.innerHTML = st.devices.map(d =>
-      `<tr><td>${d.id ?? '?'}${d.is_master ? '<span class="badge">MASTER</span>' : ''}</td>` +
-      `<td>${d.address}</td><td>${fmtPos(d.position)}</td>` +
-      (d.is_master ? '<td>—</td>' : driftCell(d.drift_ms)) + '</tr>'
-    ).join('');
+    devicesEl.innerHTML = rows.map(d => {
+      if (!d.connected) {
+        return `<tr class="offline"><td>${d.id ?? '?'}` +
+          `<span class="badge-off">OFFLINE</span></td>` +
+          `<td>${d.address}</td><td>—</td><td>—</td></tr>`;
+      }
+      return `<tr><td>${d.id ?? '?'}${d.is_master ? '<span class="badge">MASTER</span>' : ''}</td>` +
+        `<td>${d.address}</td><td>${fmtPos(d.position)}</td>` +
+        (d.is_master ? '<td>—</td>' : driftCell(d.drift_ms)) + '</tr>';
+    }).join('');
   }
 
   async function poll() {
     try {
       const r = await fetch('/api/status');
+      if (!r.ok) throw new Error('status ' + r.status);
       render(await r.json());
-      conn.textContent = 'verbunden';
-      conn.classList.remove('offline');
+      if (!uploading) {
+        conn.textContent = 'verbunden';
+        conn.classList.remove('offline');
+      }
     } catch (e) {
       conn.textContent = 'keine Verbindung zum Controller';
       conn.classList.add('offline');
+      healthpill.className = 'pill pill-offline';
+      healthpill.textContent = 'Offline';
+      healthlabel.textContent = 'Controller nicht erreichbar';
     }
   }
 
@@ -144,6 +362,46 @@
 
   document.getElementById('resync').addEventListener('click', () => {
     fetch('/api/resync', { method: 'POST' }).then(poll);
+  });
+
+  document.getElementById('restart').addEventListener('click', async () => {
+    const r = await fetch('/api/restart_playback', { method: 'POST' });
+    const body = await r.json().catch(() => ({}));
+    if (body.note) conn.textContent = body.note;
+    poll();
+  });
+
+  uploadbtn.addEventListener('click', async () => {
+    const fileInput = document.getElementById('videofile');
+    const file = fileInput.files && fileInput.files[0];
+    if (!file) {
+      videostatus.innerHTML = '<span class="fail">Bitte eine Videodatei wählen.</span>';
+      return;
+    }
+    const activate = document.getElementById('activatevlc').checked;
+    const fd = new FormData();
+    fd.append('file', file, file.name);
+    uploading = true;
+    uploadbtn.disabled = true;
+    uploadbtn.textContent = 'Verteile…';
+    videostatus.textContent = 'Upload läuft — bei großen Dateien bitte warten…';
+    conn.textContent = 'Video-Upload aktiv…';
+    try {
+      const r = await fetch('/api/video?activate=' + (activate ? '1' : '0'), {
+        method: 'POST',
+        body: fd,
+      });
+      const body = await r.json().catch(() => ({}));
+      if (body.job) renderJob(body.job);
+      else if (body.error) videostatus.innerHTML = `<span class="fail">${body.error}</span>`;
+      else videostatus.textContent = r.ok ? 'fertig' : 'fehlgeschlagen';
+    } catch (e) {
+      videostatus.innerHTML = `<span class="fail">${e.message || e}</span>`;
+    } finally {
+      uploading = false;
+      uploadbtn.textContent = 'Video verteilen';
+      poll();
+    }
   });
 
   poll();

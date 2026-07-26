@@ -2,7 +2,6 @@ from __future__ import annotations
 
 from functools import lru_cache
 import re
-import socket
 import threading
 import time
 from typing import Set, List, Optional
@@ -17,8 +16,6 @@ from vlcsync.vlc_state import PlayState, State, VlcId, PlayList, PlayListItem
 VLC_IFACE_IP = "127.0.0.42"
 RE_PLAYSTATE_COMPILED = re.compile(r"\( state (playing|stopped|paused) \)")
 RE_PLAYLIST_ITEM = re.compile(r'\| {2}([ *])(\d+) - ')
-
-socket.setdefaulttimeout(0.5)
 
 
 class Vlc:
@@ -184,6 +181,7 @@ class Vlc:
 class VlcProcs:
     def __init__(self, vlc_list_providers: Set[IVlcListFinder]):
         self.closed = False
+        self._lock = threading.Lock()
         self._vlc_instances: dict[VlcId, Vlc] = {}
         self.vlc_list_providers = vlc_list_providers
         self.vlc_finder_thread = threading.Thread(target=self.refresh_vlc_list_periodically, daemon=True)
@@ -193,25 +191,39 @@ class VlcProcs:
         while not self.closed:
             start = time.time()
 
-            vlc_candidates = []
+            vlc_candidates: Set[VlcId] = set()
 
             for vlc_list_provider in self.vlc_list_providers:
                 vlc_list_provider: IVlcListFinder
                 next_vlc_ids_list: Set[VlcId] = vlc_list_provider.get_vlc_list()
 
-                vlc_candidates.extend(next_vlc_ids_list)
+                vlc_candidates |= next_vlc_ids_list
                 logger.debug(next_vlc_ids_list)
 
+            with self._lock:
+                known = set(self._vlc_instances.keys())
+
             # Remove missed
-            for orphaned_vlc in (self._vlc_instances.keys() - vlc_candidates):
+            for orphaned_vlc in known - vlc_candidates:
                 self.dereg(orphaned_vlc)
 
-            # Populate if not exists
+            # Populate if not exists (connect outside the lock — can block)
             for vlc_id in vlc_candidates:
-                if vlc_id not in self._vlc_instances.keys():
-                    if vlc := self.try_connect(vlc_id):
-                        print(f"Found active instance {vlc_id}, with state {vlc.cur_state()}", flush=True)
-                        self._vlc_instances[vlc_id] = vlc
+                with self._lock:
+                    already = vlc_id in self._vlc_instances
+                if already:
+                    continue
+                if vlc := self.try_connect(vlc_id):
+                    with self._lock:
+                        if self.closed or vlc_id in self._vlc_instances:
+                            keep = False
+                        else:
+                            self._vlc_instances[vlc_id] = vlc
+                            keep = True
+                    if keep:
+                        print(f"Found active instance {vlc_id}, with state {vlc.prev_state}", flush=True)
+                    else:
+                        vlc.close()
 
             logger.debug(f"Compute all_vlc (took {time.time() - start:.3f})...")
             time.sleep(5)
@@ -227,7 +239,8 @@ class VlcProcs:
 
     @property
     def all_vlc(self) -> dict[VlcId, Vlc]:
-        return self._vlc_instances.copy()  # copy: for thread safe
+        with self._lock:
+            return self._vlc_instances.copy()
 
     def sync_all(self, state: State, source_vlc: Vlc, app_config: AppConfig):
         logger.debug(">" * 60)
@@ -246,16 +259,19 @@ class VlcProcs:
         print()
 
     def dereg(self, vlc_id: VlcId):
-        print(f"Detect vlc instance closed {vlc_id}", flush=True)
-        if vlc_to_close := self._vlc_instances.pop(vlc_id, None):
+        with self._lock:
+            vlc_to_close = self._vlc_instances.pop(vlc_id, None)
+        if vlc_to_close:
+            print(f"Detect vlc instance closed {vlc_id}", flush=True)
             vlc_to_close.close()
 
     def close(self):
-        for vlc in self._vlc_instances.values():
-            vlc.close()
-
         self.closed = True
-        self._vlc_instances.clear()
+        with self._lock:
+            instances = list(self._vlc_instances.values())
+            self._vlc_instances.clear()
+        for vlc in instances:
+            vlc.close()
 
     def __del__(self):
         self.close()

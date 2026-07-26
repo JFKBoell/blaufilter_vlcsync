@@ -84,7 +84,8 @@ Das Script richtet ein:
 | WLAN-AP `192.168.4.1/24` (NetworkManager, DHCP inklusive) | ✓ | — |
 | WLAN-Client mit statischer IP | — | ✓ |
 | VLC-Autostart (User-Unit `blaufilter-vlc`, Vollbild, Loop, RC auf :4212) | ✓ | ✓ |
-| Controller + Web-UI (System-Unit `blaufilter-controller`) | ✓ | — |
+| Video-Agent (System-Unit `blaufilter-agent`, Port 4213) | ✓ | ✓ |
+| Controller + Web-UI (System-Unit `blaufilter-controller`, Waitress :80) | ✓ | — |
 | Namensauflösung `blaufilter.local` (mDNS + DHCP-DNS) | ✓ | — |
 | Desktop-Autologin, Bildschirm-Blanking aus | ✓ | ✓ |
 | Eigener Bootscreen (nur mit `--splash`) | ✓ | ✓ |
@@ -115,8 +116,13 @@ Mit dem WLAN `Blaufilter` verbinden und **http://blaufilter.local** öffnen
 - **Geschwindigkeit** 0,5×–2,0× in 0,05er-Schritten.
 - **Gerätetabelle** — zeigt pro Gerät Position und aktuellen Drift (grün
   < 250 ms, orange < 500 ms, rot darüber). Das Master-Gerät ist markiert.
+  Offline-Kandidaten erscheinen grau.
 - **Jetzt neu synchronisieren** — erzwingt sofortigen Seek aller Geräte auf
   die Master-Position.
+- **Video austauschen** — Datei im Web-UI wählen und „Video verteilen“:
+  ersetzt `/opt/blaufilter/video/main.mp4` auf dem Host, kopiert sie per WLAN
+  an alle Clients (Agent auf Port 4213) und startet optional VLC überall neu.
+  Große 4K-Dateien über 2,4‑GHz-WLAN können mehrere Minuten dauern.
 
 ## Wie die Synchronisation funktioniert
 
@@ -163,6 +169,8 @@ System, selbst wenn Tastatur/SSH nicht helfen.
 - **Läuft der Controller?** (Host) `sudo systemctl status blaufilter-controller`
   bzw. `journalctl -u blaufilter-controller -f` — dort stehen Geräte-Joins
   und jede Driftkorrektur.
+- **Läuft der Video-Agent?** (alle Pis) `sudo systemctl status blaufilter-agent`
+  — ohne Agent schlägt die Video-Verteilung aus dem Web-UI fehl.
 - **VLC startet nach Login nicht** (User-Unit bleibt `inactive`): Manche
   Sessions aktivieren `graphical-session.target` nicht zuverlässig. Dafür liegt
   ein Fallback in `~/.config/autostart/blaufilter-vlc.desktop`, der die Unit
