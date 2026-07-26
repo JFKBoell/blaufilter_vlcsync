@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 import threading
 import time
 from dataclasses import dataclass, field
@@ -15,6 +16,7 @@ from blaufilter.config import BlaufilterConfig, clamp_rate
 from blaufilter.tracker import PositionTracker, modular_diff
 from blaufilter import video_ops
 from blaufilter import distribute as video_distribute
+from blaufilter.agent import restart_vlc_unit
 
 TICK_INTERVAL = 0.1
 PLAYSTATE_POLL_EVERY_N_TICKS = 10
@@ -320,15 +322,25 @@ class Controller:
     def video_job_busy(self) -> bool:
         return self._video_busy
 
-    def ingest_video_stream(self, stream, activate: bool = True) -> dict:
-        """Replace local video, push to peer agents, optionally restart VLC everywhere."""
+    def ingest_video_stream(self, stream, activate: bool = True,
+                            target_ip: Optional[str] = None) -> dict:
+        """Replace video and optionally restart VLC — on all devices or one target.
+
+        target_ip=None: replace the host file and push to all reachable peers.
+        target_ip=<addr>: only that device receives the upload; the host file
+        stays untouched unless the host itself is the target. This enables a
+        different video per device (all videos must have the same length for
+        the drift sync to make sense).
+        """
         with self._video_job_lock:
             if self._video_busy:
                 raise RuntimeError("video job already running")
             self._video_busy = True
 
+        self_ip = self.cfg.ip_for_id(self.cfg.device_id)
         job = {
             "phase": "saving",
+            "target": target_ip or "all",
             "started_at": time.time(),
             "finished_at": None,
             "ok": False,
@@ -339,29 +351,59 @@ class Controller:
         }
         self.last_video_job = job
         try:
-            local = video_ops.atomic_replace_from_stream(self.cfg.video_path, stream)
-            job["local"] = local
-            job["phase"] = "distributing"
-            self_ip = self.cfg.ip_for_id(self.cfg.device_id)
-            # Always record host as local success without HTTP round-trip
-            host_row = {
-                "address": self_ip,
-                "id": self.cfg.device_id,
-                "ok": True,
-                "video": local,
-                "message": "local",
-                "local": True,
-            }
-            peers = video_distribute.distribute_video(
-                self.cfg, self.cfg.video_path, skip_ips=[self_ip]
-            )
-            job["distribute"] = [host_row] + peers
-            if activate:
-                job["phase"] = "activating"
-                job["activate"] = video_distribute.activate_playback(self.cfg)
-            job["ok"] = bool(local.get("present")) and all(
-                r.get("ok") for r in job["distribute"]
-            ) and (not activate or all(r.get("ok") for r in job["activate"]))
+            if target_ip is None or target_ip == self_ip:
+                local = video_ops.atomic_replace_from_stream(self.cfg.video_path, stream)
+                job["local"] = local
+                # Host row without HTTP round-trip
+                host_row = {
+                    "address": self_ip,
+                    "id": self.cfg.device_id,
+                    "ok": True,
+                    "video": local,
+                    "message": "local",
+                    "local": True,
+                }
+                if target_ip is None:
+                    job["phase"] = "distributing"
+                    peers = video_distribute.distribute_video(
+                        self.cfg, self.cfg.video_path, skip_ips=[self_ip]
+                    )
+                    job["distribute"] = [host_row] + peers
+                else:
+                    job["distribute"] = [host_row]
+                if activate:
+                    job["phase"] = "activating"
+                    if target_ip is None:
+                        job["activate"] = video_distribute.activate_playback(self.cfg)
+                    else:
+                        ok, message = restart_vlc_unit(self.cfg.vlc_unit)
+                        job["activate"] = [{
+                            "address": self_ip, "id": self.cfg.device_id,
+                            "ok": ok, "message": message, "local": True,
+                        }]
+            else:
+                # Remote-only target: spool beside the video (same filesystem),
+                # push to that one agent, clean up
+                tmp_path = self.cfg.video_path + ".push-tmp"
+                try:
+                    video_ops.atomic_replace_from_stream(tmp_path, stream)
+                    job["phase"] = "distributing"
+                    job["distribute"] = [
+                        video_distribute.push_video_to(self.cfg, tmp_path, target_ip)
+                    ]
+                finally:
+                    try:
+                        os.remove(tmp_path)
+                    except OSError:
+                        pass
+                if activate and all(r.get("ok") for r in job["distribute"]):
+                    job["phase"] = "activating"
+                    job["activate"] = [video_distribute.restart_vlc_on(self.cfg, target_ip)]
+
+            local_ok = job["local"] is None or bool(job["local"].get("present"))
+            job["ok"] = (local_ok
+                         and all(r.get("ok") for r in job["distribute"])
+                         and all(r.get("ok") for r in job["activate"]))
             job["phase"] = "done"
             return job
         except Exception as e:
@@ -449,6 +491,14 @@ class Controller:
 
         if connected > 0 and not video_length:
             issues.append("Master meldet keine Videolänge (Medium fehlt in VLC?)")
+
+        lengths = {d.get("length") for d in devices
+                   if d.get("connected") and d.get("length")}
+        if len(lengths) > 1:
+            issues.append(
+                "Geräte melden unterschiedliche Videolängen — "
+                "der Sync erfordert gleich lange Videos"
+            )
 
         bad_drift = [
             d for d in devices

@@ -93,6 +93,10 @@
   .upload-row input[type=file] {
     width: 100%; font-size: 0.9rem; color: #e0e6ed;
   }
+  .upload-row select {
+    background: #0d1b2a; color: #e0e6ed; border: 1px solid #2a3f57;
+    border-radius: 6px; padding: 0.4rem 0.5rem; font-size: 0.95rem;
+  }
   .check {
     display: flex; align-items: center; gap: 0.5rem; font-size: 0.9rem; color: #c5d4e3;
     text-transform: none; letter-spacing: 0;
@@ -145,16 +149,22 @@
     <label>Video austauschen</label>
     <div class="upload-row">
       <input type="file" id="videofile" accept="video/*,.mp4,.mkv,.mov">
+      <select id="uploadtarget">
+        <option value="all">Ziel: Alle Geräte</option>
+      </select>
       <label class="check">
         <input type="checkbox" id="activatevlc" checked>
-        Nach Upload VLC auf allen Geräten neu starten
+        Nach Upload VLC neu starten
       </label>
       <button type="button" id="uploadbtn">Video verteilen</button>
     </div>
     <div id="videostatus"></div>
     <p class="hint">
-      Ersetzt <code>/opt/blaufilter/video/main.mp4</code> auf dem Host und kopiert die Datei
-      per WLAN an alle Clients. 4K-Dateien über 2,4‑GHz-WLAN können mehrere Minuten dauern.
+      „Alle Geräte“ ersetzt <code>/opt/blaufilter/video/main.mp4</code> überall mit derselben
+      Datei; mit einem einzelnen Ziel bekommt nur dieses Gerät das Video (so kann jedes Gerät
+      ein eigenes Video zeigen — <strong>alle Videos müssen gleich lang sein</strong>, sonst
+      passt die Synchronisation nicht). Offline-Geräte werden übersprungen. 4K-Dateien über
+      2,4‑GHz-WLAN können mehrere Minuten dauern.
     </p>
   </div>
 
@@ -310,6 +320,20 @@
     uploadbtn.disabled = uploading || !!st.video_busy;
 
     const rows = st.devices || [];
+
+    // Upload-target dropdown: "all" + every connected device, keep selection
+    const sel = document.getElementById('uploadtarget');
+    const optHtml = ['<option value="all">Ziel: Alle Geräte</option>'].concat(
+      rows.filter(d => d.connected && d.id != null).map(d =>
+        `<option value="${d.id}">Ziel: Nur Gerät ${d.id}${d.is_master ? ' (Master)' : ''}</option>`)
+    ).join('');
+    if (sel.dataset.opts !== optHtml) {
+      const current = sel.value;
+      sel.innerHTML = optHtml;
+      sel.dataset.opts = optHtml;
+      sel.value = [...sel.options].some(o => o.value === current) ? current : 'all';
+    }
+
     if (!rows.length) {
       devicesEl.innerHTML = '<tr><td colspan="4">keine Kandidaten konfiguriert</td></tr>';
       return;
@@ -379,17 +403,19 @@
       return;
     }
     const activate = document.getElementById('activatevlc').checked;
-    const fd = new FormData();
-    fd.append('file', file, file.name);
     uploading = true;
     uploadbtn.disabled = true;
     uploadbtn.textContent = 'Verteile…';
     videostatus.textContent = 'Upload läuft — bei großen Dateien bitte warten…';
     conn.textContent = 'Video-Upload aktiv…';
+    const target = document.getElementById('uploadtarget').value || 'all';
     try {
-      const r = await fetch('/api/video?activate=' + (activate ? '1' : '0'), {
-        method: 'POST',
-        body: fd,
+      // Raw PUT streams the file without multipart re-buffering on the host
+      const r = await fetch('/api/video?activate=' + (activate ? '1' : '0') +
+                            '&target=' + encodeURIComponent(target), {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/octet-stream' },
+        body: file,
       });
       const body = await r.json().catch(() => ({}));
       if (body.job) renderJob(body.job);

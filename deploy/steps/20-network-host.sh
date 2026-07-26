@@ -4,10 +4,9 @@
 # clients and any phone/laptop that joins to use the web UI) — no hostapd needed.
 set -euo pipefail
 
-echo "==> [20-network-host] Ensuring dnsmasq-base (NetworkManager's DHCP backend)"
-apt-get install -y --no-install-recommends dnsmasq-base
-
 echo "==> [20-network-host] Configuring WiFi AP '$BF_SSID' on 192.168.4.1/24"
+# NOTE: all apt packages (dnsmasq-base, avahi) are installed in 10-base.sh —
+# once the AP is up, this device has no internet connectivity anymore.
 # Security is pinned to plain WPA2/CCMP with PMF off and a fixed channel:
 # without this, NetworkManager may negotiate WPA1/TKIP mixed mode or
 # WPA3-transition/PMF, which many clients fail to join. WPS must be off,
@@ -40,8 +39,8 @@ EOF
 systemctl restart NetworkManager
 nmcli connection up blaufilter-ap || true
 
-# ...while Apple devices resolve .local exclusively via mDNS (avahi alias)
-apt-get install -y --no-install-recommends avahi-daemon avahi-utils
+# ...while Apple devices resolve .local exclusively via mDNS (avahi alias,
+# packages installed in 10-base.sh)
 install -m 644 "$BF_REPO_DIR/deploy/systemd/blaufilter-mdns-alias.service" /etc/systemd/system/
 systemctl daemon-reload
 systemctl enable blaufilter-mdns-alias

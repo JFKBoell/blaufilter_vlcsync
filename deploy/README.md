@@ -119,10 +119,18 @@ Mit dem WLAN `Blaufilter` verbinden und **http://blaufilter.local** öffnen
   Offline-Kandidaten erscheinen grau.
 - **Jetzt neu synchronisieren** — erzwingt sofortigen Seek aller Geräte auf
   die Master-Position.
-- **Video austauschen** — Datei im Web-UI wählen und „Video verteilen“:
-  ersetzt `/opt/blaufilter/video/main.mp4` auf dem Host, kopiert sie per WLAN
-  an alle Clients (Agent auf Port 4213) und startet optional VLC überall neu.
-  Große 4K-Dateien über 2,4‑GHz-WLAN können mehrere Minuten dauern.
+- **Video austauschen** — Datei im Web-UI wählen, Ziel bestimmen und „Video
+  verteilen“: Bei **„Alle Geräte“** wird `/opt/blaufilter/video/main.mp4` auf
+  dem Host ersetzt und per WLAN an alle erreichbaren Clients kopiert (Agent
+  auf Port 4213); Offline-Geräte werden übersprungen. Bei einem **einzelnen
+  Ziel** bekommt nur dieses Gerät die Datei — so kann jedes Gerät ein eigenes
+  Video zeigen. **Alle Videos müssen gleich lang sein**, sonst passt die
+  Drift-Synchronisation nicht (das Status-Panel warnt bei abweichenden
+  Längen). Optional wird VLC nach dem Upload neu gestartet; das Gerät steigt
+  dann bei 0 ein und wird vom Controller auf die Master-Position gezogen.
+  Große 4K-Dateien über 2,4‑GHz-WLAN können mehrere Minuten dauern; auf dem
+  Host wird während des Uploads kurzzeitig etwa der doppelte Speicherplatz
+  der Datei benötigt (Empfangspuffer + Zieldatei).
 
 ## Wie die Synchronisation funktioniert
 
@@ -140,6 +148,16 @@ Mit dem WLAN `Blaufilter` verbinden und **http://blaufilter.local** öffnen
 
 Schwellen sind in `/etc/blaufilter/config` übersteuerbar
 (`drift_threshold`, `hysteresis_cycles`, `cooldown_s`, `rate_nudge`, `web_port`).
+
+### Updates einspielen
+
+Auf jedem Gerät: `git pull` im Repo, dann das Install-Script **mit denselben
+Argumenten wie bei der Erstinstallation** erneut ausführen. Auf Geräten, die
+nur noch im Blaufilter-WLAN hängen (kein Internet), installiert das Script
+offline aus dem lokalen Repo — **neue Python-Abhängigkeiten können dabei
+nicht nachgeladen werden**. Bringt ein Update neue Abhängigkeiten mit (z. B.
+`waitress` für den Video-Agent), das Gerät vorübergehend per Ethernet oder
+anderem WLAN ans Internet hängen.
 
 ## Notausstieg: `blaufilter.txt` auf der Boot-Partition
 

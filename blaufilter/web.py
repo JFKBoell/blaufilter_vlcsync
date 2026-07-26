@@ -62,19 +62,44 @@ def create_app(controller: Controller) -> Flask:
             ),
         })
 
-    @app.post("/api/video")
+    @app.route("/api/video", methods=["POST", "PUT"])
     def upload_video():
-        """Replace main.mp4 locally, push to peer agents, optionally restart VLC."""
+        """Replace main.mp4 locally, push to peer agents, optionally restart VLC.
+
+        Preferred: raw body (PUT/POST with the file as body) — avoids werkzeug's
+        extra multipart spool file for multi-GB uploads. multipart/form-data
+        with field 'file' stays supported for compatibility.
+        """
         if controller.video_job_busy():
             return jsonify({"error": "video job already running"}), 409
 
         activate = request.args.get("activate", "1") not in ("0", "false", "no")
-        upload = request.files.get("file") or request.files.get("video")
-        if upload is None or upload.filename == "":
-            return jsonify({"error": "multipart field 'file' required"}), 400
+
+        # target: "all" (default) or a device id -> upload only to that device
+        target = request.args.get("target", "all")
+        target_ip = None
+        if target not in ("all", ""):
+            try:
+                target_id = int(target)
+            except ValueError:
+                return jsonify({"error": "target must be 'all' or a device id"}), 400
+            if not 1 <= target_id <= controller.cfg.max_devices:
+                return jsonify({"error": f"target id out of range 1..{controller.cfg.max_devices}"}), 400
+            target_ip = controller.cfg.ip_for_id(target_id)
+
+        if request.mimetype == "multipart/form-data":
+            upload = request.files.get("file") or request.files.get("video")
+            if upload is None or upload.filename == "":
+                return jsonify({"error": "multipart field 'file' required"}), 400
+            stream = upload.stream
+        else:
+            if not request.content_length:
+                return jsonify({"error": "empty body"}), 400
+            stream = request.stream
 
         try:
-            job = controller.ingest_video_stream(upload.stream, activate=activate)
+            job = controller.ingest_video_stream(stream, activate=activate,
+                                                 target_ip=target_ip)
         except RuntimeError as e:
             return jsonify({"error": str(e)}), 409
         except OSError as e:
