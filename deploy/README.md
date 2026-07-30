@@ -235,6 +235,18 @@ System, selbst wenn Tastatur/SSH nicht helfen.
   `/etc/NetworkManager/dnsmasq-shared.d/blaufilter.conf` existiert
   (DNS für Windows/Android; greift erst nach `systemctl restart NetworkManager`
   und neuem DHCP-Lease am Client).
+- **Ein Client sendet selbst ein „Blaufilter“-WLAN**, statt dem Master
+  beizutreten: Auf dem Gerät sind Host-Reste aktiv — typisch bei geklonten
+  SD-Karten oder wenn versehentlich mit `--id 1` installiert wurde. Das
+  aktuelle Install-Script räumt das bei einer Client-Installation automatisch
+  auf; von Hand:
+
+  ```bash
+  sudo nmcli connection delete blaufilter-ap
+  sudo systemctl disable --now blaufilter-controller blaufilter-mdns-alias
+  sudo nmcli connection up blaufilter    # dem Master-WLAN beitreten
+  cat /etc/blaufilter/config             # device_id kontrollieren (muss != 1 sein)
+  ```
 - **Client taucht nicht auf:** WLAN prüfen (`nmcli device`), dann ob VLC lauscht:
   `nc -z 192.168.4.13 4212 && echo ok`.
 - **RC-Interface von Hand testen:** `nc 192.168.4.12 4212`, dann z. B.

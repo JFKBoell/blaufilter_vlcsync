@@ -5,6 +5,14 @@ set -euo pipefail
 
 CLIENT_IP="192.168.4.$((10 + BF_ID))"
 
+echo "==> [20-network-client] Removing host-role leftovers (cloned SD / role switch)"
+# A leftover AP profile would make this client broadcast its own 'Blaufilter'
+# network instead of joining the master's — seen with cloned SD cards.
+nmcli connection delete blaufilter-ap 2>/dev/null || true
+systemctl disable --now blaufilter-controller 2>/dev/null || true
+systemctl disable --now blaufilter-mdns-alias 2>/dev/null || true
+rm -f /etc/NetworkManager/dnsmasq-shared.d/blaufilter.conf
+
 echo "==> [20-network-client] Joining '$BF_SSID' as $CLIENT_IP"
 nmcli connection delete blaufilter 2>/dev/null || true
 nmcli connection add type wifi ifname wlan0 con-name blaufilter autoconnect yes \
