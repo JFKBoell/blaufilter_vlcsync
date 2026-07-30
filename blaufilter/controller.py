@@ -26,7 +26,9 @@ NUDGE_DONE_DRIFT = 0.05
 NUDGE_FACTOR_MIN = 0.02
 NUDGE_FACTOR_MAX = 0.08
 CONN_FAIL_DROP_AFTER = 3
-STATE_CMD_GRACE_S = 2.0
+STATE_CMD_MIN_INTERVAL_S = 2.0
+MOVING_WINDOW_S = 2.5
+PAUSE_RESEND_MIN_ADVANCE = 2
 SEEK_BACKOFF_WINDOW_S = 60.0
 SEEK_COOLDOWN_MAX_S = 60.0
 DRIFT_WARN_MS = 250
@@ -53,9 +55,16 @@ class DeviceView:
     nudging: bool = False
     conn_fail_count: int = 0
     """Consecutive RC failures; only a streak drops the device (WiFi tolerance)."""
-    state_grace_until: float = 0.0
-    """After sending play/pause, skip re-enforcement until VLC's reported state
-    caught up — RC 'pause' toggles, a double-send would flip the state back."""
+    last_seek_value: Optional[int] = None
+    last_seek_change_at: float = 0.0
+    """Movement evidence: when the integer get_time value last changed. A truly
+    paused VLC never advances — unlike its RC status report, which can lag the
+    real state by seconds."""
+    state_cmd_sent_at: float = 0.0
+    seek_value_at_state_cmd: Optional[int] = None
+    """When and at which position the last play/pause command was sent. RC
+    'pause' toggles, so it is only ever re-sent on movement PROOF after the
+    previous send — a stale status report must never trigger a re-toggle."""
     seek_cooldown_s: float = 0.0
     """Current per-device seek cooldown; doubles on rapid re-corrections."""
 
@@ -153,11 +162,15 @@ class Controller:
         now = time.time()
         for vlc_id, device in list(self.devices.items()):
             try:
-                device.tracker.observe(now, device.vlc.get_seek())
+                value = device.vlc.get_seek()
+                device.tracker.observe(now, value)
                 device.conn_fail_count = 0
             except VlcConnectionError:
                 self._conn_fail(vlc_id, device)
                 continue
+            if value is not None and value != device.last_seek_value:
+                device.last_seek_value = value
+                device.last_seek_change_at = now
             device.last_position = device.tracker.est_position(now, device.applied_rate)
 
     def _enforce_play_state(self):
@@ -169,26 +182,50 @@ class Controller:
                 self._conn_fail(vlc_id, device)
 
     def _apply_play_state(self, device: DeviceView):
+        """Enforce the desired play state against movement EVIDENCE, not just
+        VLC's status report — the lua CLI status can lag the real input state
+        by several seconds, and RC 'pause' is a toggle: acting on a stale
+        'playing' report after a pause command would resume playback.
+        """
         now = time.time()
-        if now < device.state_grace_until:
-            # A play/pause command is still settling in VLC; RC 'pause' toggles,
-            # so re-sending based on the stale reported state would flip it back
+        if device.state_cmd_sent_at and now - device.state_cmd_sent_at < STATE_CMD_MIN_INTERVAL_S:
             return
         device.play_state = device.vlc.play_state()
-        if device.play_state == self.desired_play_state:
-            return
+
+        # "moving": the integer position changed recently (window scaled for
+        # slow playback rates, where increments arrive less often)
+        window = MOVING_WINDOW_S / min(1.0, device.applied_rate or 1.0)
+        moving = device.last_seek_change_at > 0 and (now - device.last_seek_change_at) < window
+
         if self.desired_play_state == PlayState.PLAYING:
-            if device.play_state in (PlayState.PAUSED, PlayState.STOPPED):
+            # 'play' does not toggle — re-sending is harmless. Send when VLC
+            # reports paused/stopped OR the position provably stands still.
+            if device.play_state in (PlayState.PAUSED, PlayState.STOPPED) or not moving:
                 device.vlc.play()
                 device.tracker.reset()
                 device.play_state = PlayState.PLAYING
-                device.state_grace_until = now + STATE_CMD_GRACE_S
+                device.state_cmd_sent_at = now
+                device.seek_value_at_state_cmd = device.last_seek_value
         elif self.desired_play_state == PlayState.PAUSED:
-            if device.play_state == PlayState.PLAYING:
-                device.vlc.pause()  # RC "pause" toggles; only send when playing
+            if device.seek_value_at_state_cmd is None:
+                # First pause since the desired state changed: trust the (still
+                # fresh) report or visible movement
+                should_pause = device.play_state == PlayState.PLAYING or moving
+            else:
+                # A pause was already sent: ONLY movement since that command
+                # proves it did not stick. A stale 'playing' status must never
+                # cause a re-toggle.
+                should_pause = (
+                    device.last_seek_value is not None
+                    and abs(device.last_seek_value - device.seek_value_at_state_cmd)
+                    >= PAUSE_RESEND_MIN_ADVANCE
+                )
+            if should_pause:
+                device.vlc.pause()  # RC "pause" toggles
                 device.tracker.reset()
                 device.play_state = PlayState.PAUSED
-                device.state_grace_until = now + STATE_CMD_GRACE_S
+                device.state_cmd_sent_at = now
+                device.seek_value_at_state_cmd = device.last_seek_value
 
     # ------------------------------------------------------ drift correction
 
@@ -272,9 +309,20 @@ class Controller:
             device.nudging = False
         device.vlc.seek(target)
         device.tracker.reset()
+        self._note_commanded_seek(device, target)
         device.over_threshold_count = 0
         device.cooldown_until = now + device.seek_cooldown_s
         device.last_correction_at = now
+
+    @staticmethod
+    def _note_commanded_seek(device: DeviceView, target: int):
+        """A seek WE commanded must not count as movement evidence — otherwise
+        the pause re-send logic would read the position jump as 'still playing'
+        and toggle a paused device back on."""
+        device.last_seek_value = target
+        device.last_seek_change_at = 0.0
+        if device.seek_value_at_state_cmd is not None:
+            device.seek_value_at_state_cmd = target
 
     def _rate_nudge(self, device: DeviceView, drift: float):
         """Smoothly pull an off-position device back by temporarily skewing its
@@ -297,12 +345,14 @@ class Controller:
     # ------------------------------------------------------------ web-facing
 
     def _set_desired_play_state(self, state: PlayState):
-        # A CHANGED desired state lifts the settle grace (the transition is
-        # new); a repeated request keeps it, protecting against double-toggle.
+        # A CHANGED desired state resets the per-device command tracking (the
+        # transition is new); a repeated request keeps it, protecting against
+        # a double pause-toggle.
         if self.desired_play_state != state:
             self.desired_play_state = state
             for device in self.devices.values():
-                device.state_grace_until = 0.0
+                device.state_cmd_sent_at = 0.0
+                device.seek_value_at_state_cmd = None
         self._enforce_play_state()
 
     def play(self):
@@ -362,6 +412,7 @@ class Controller:
                         device.nudging = False
                     device.vlc.seek(0)
                     device.tracker.reset()
+                    self._note_commanded_seek(device, 0)
                     device.over_threshold_count = 0
                     device.cooldown_until = now + self.cfg.cooldown_s
                     device.last_correction_at = now

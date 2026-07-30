@@ -217,38 +217,73 @@ def test_seek_cooldown_backs_off_on_rapid_recorrection(stack):
     assert slave_device.seek_cooldown_s > first_cooldown
 
 
+def pause_cmds(player):
+    return [c for c in player.received if c.strip() == "pause"]
+
+
 def test_pause_enforcement_does_not_toggle_back(stack):
-    """RC 'pause' toggles. When VLC reports the old state for a moment after the
-    command, re-enforcement must NOT send a second 'pause' (which would resume)."""
+    """RC 'pause' toggles, and VLC's status report can lag the real state by
+    seconds. A stale 'playing' report must never trigger a second 'pause'
+    (which would resume playback) — only MOVEMENT after the command may."""
     players = [
         EmulatedPlayer(length=3600, start_position=10),
         EmulatedPlayer(length=3600, start_position=10),
     ]
     servers, controller = stack(players)
     assert tick_until(controller, lambda: len(controller.devices) == 2)
+    tick_for(controller, 1.2)  # warm up movement tracking
 
-    # Freeze the reported state at 'playing' to simulate VLC's settling lag
+    # Status permanently lies 'playing' — much longer than any grace timer
     for server in servers:
         server.player.report_state_override = "playing"
 
     controller.pause()
-    for _ in range(5):
-        with controller.lock:
-            controller._enforce_play_state()
-
     for player in (s.player for s in servers):
-        pauses = [c for c in player.received if c.strip() == "pause"]
-        assert len(pauses) == 1, "grace period must prevent double pause-toggle"
+        assert len(pause_cmds(player)) == 1
+        assert player.state == "paused"
 
-    # After the grace expires and VLC reports the real state, no further sends
-    for server in servers:
-        server.player.report_state_override = None
-    for device in controller.devices.values():
-        device.state_grace_until = 0.0
-    with controller.lock:
-        controller._enforce_play_state()
+    # Enforcement keeps running against the lying status: position is frozen,
+    # so no re-send may happen, no matter how long
+    tick_for(controller, 3.0)
     for player in (s.player for s in servers):
-        assert len([c for c in player.received if c.strip() == "pause"]) == 1
+        assert len(pause_cmds(player)) == 1, "stale status must not re-toggle"
+        assert player.state == "paused"
+
+
+def test_pause_resends_when_playback_provably_continues(stack):
+    """If the pause command did not stick (device keeps advancing), the
+    movement proof triggers exactly the needed re-send."""
+    players = [EmulatedPlayer(length=3600, start_position=10)]
+    servers, controller = stack(players)
+    assert tick_until(controller, lambda: len(controller.devices) == 1)
+    tick_for(controller, 1.2)
+
+    controller.pause()
+    player = servers[0].player
+    assert len(pause_cmds(player)) == 1
+
+    # Simulate a lost/failed pause: device silently keeps playing
+    player.play()
+    assert tick_until(controller, lambda: len(pause_cmds(player)) >= 2, timeout=10.0), \
+        "provable movement after the pause command must trigger a re-send"
+    assert player.state == "paused"
+
+
+def test_play_recovers_from_stalled_playback(stack):
+    """Desired PLAYING + frozen position -> send 'play' even when the status
+    report claims 'playing'. Heals the all-devices-halted condition."""
+    players = [EmulatedPlayer(length=3600, start_position=10)]
+    servers, controller = stack(players)
+    assert tick_until(controller, lambda: len(controller.devices) == 1)
+    tick_for(controller, 1.2)
+
+    player = servers[0].player
+    # Device is actually paused but its status lies 'playing'
+    player.pause_toggle()
+    player.report_state_override = "playing"
+
+    assert tick_until(controller, lambda: player.state == "playing", timeout=10.0), \
+        "frozen position with desired PLAYING must trigger a recovery 'play'"
 
 
 def test_single_connection_error_does_not_drop_device(stack):
