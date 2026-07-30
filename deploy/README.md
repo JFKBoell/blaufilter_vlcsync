@@ -138,16 +138,25 @@ Mit dem WLAN `Blaufilter` verbinden und **http://blaufilter.local** öffnen
   Da VLC die Position nur in ganzen Sekunden meldet, wird der Sekundenwechsel
   abgepasst (Boundary-Sampling) und dazwischen mit der Abspielrate
   extrapoliert → Messgenauigkeit ~±150 ms.
-- Weicht ein Gerät > 0,5 s vom Master ab (3 Zyklen in Folge, danach 5 s
-  Abkühlphase), wird es per Seek korrigiert.
+- **Sanfte Korrektur (Standard):** Abweichungen von 0,15–3 s werden unsichtbar
+  über eine temporär um 2–8 % verstellte Abspielrate ausgeglichen — kein
+  Ruckeln, das Gerät „schwimmt" zurück auf die Master-Position.
+- **Seek nur als Notbremse:** Erst ab > 3 s Drift (3 Zyklen in Folge) wird
+  gesprungen — ein Seek stoppt die 4K-Dekodierung sichtbar und landet je nach
+  Keyframe-Abstand nicht exakt. Springt ein Gerät wiederholt kurz
+  hintereinander, verdoppelt sich seine Abkühlphase automatisch (10 s → … →
+  60 s), damit keine Ruckel-Schleife entsteht.
 - Am Loop-Übergang (±3 s um Anfang/Ende) sind Korrekturen unterdrückt, damit
   der versetzte Umbruch der Geräte keinen Seek-Sturm auslöst.
-- Optional (`--rate-nudge` in der Unit ergänzen): kleine Abweichungen
-  (0,15–0,5 s) werden unsichtbar über ±3 % Abspielrate ausgeglichen statt
-  per Seek.
+- **WLAN-Toleranz:** Einzelne verzögerte/verlorene RC-Antworten (normal im
+  2,4-GHz-WLAN) werden toleriert; erst drei Fehler in Folge gelten als
+  Verbindungsabriss. So setzt der Sync bei kurzen Funkstörungen nicht aus.
 
 Schwellen sind in `/etc/blaufilter/config` übersteuerbar
 (`drift_threshold`, `hysteresis_cycles`, `cooldown_s`, `rate_nudge`, `web_port`).
+Ruckelt es trotzdem periodisch: prüfen, ob das Video mit kurzem
+Keyframe-Abstand (GOP ≤ 2 s) kodiert ist — Seeks landen sonst weit daneben
+und provozieren Folgekorrekturen.
 
 ### Updates einspielen
 

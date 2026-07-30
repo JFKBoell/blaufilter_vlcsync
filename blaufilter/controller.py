@@ -21,9 +21,14 @@ from blaufilter.agent import restart_vlc_unit
 TICK_INTERVAL = 0.1
 PLAYSTATE_POLL_EVERY_N_TICKS = 10
 LOOP_BOUNDARY_GRACE_S = 3.0
-NUDGE_FACTOR = 0.03
 NUDGE_MIN_DRIFT = 0.15
 NUDGE_DONE_DRIFT = 0.05
+NUDGE_FACTOR_MIN = 0.02
+NUDGE_FACTOR_MAX = 0.08
+CONN_FAIL_DROP_AFTER = 3
+STATE_CMD_GRACE_S = 2.0
+SEEK_BACKOFF_WINDOW_S = 60.0
+SEEK_COOLDOWN_MAX_S = 60.0
 DRIFT_WARN_MS = 250
 DRIFT_BAD_MS = 500
 
@@ -46,6 +51,13 @@ class DeviceView:
     last_position: Optional[float] = None
     play_state: PlayState = PlayState.UNKNOWN
     nudging: bool = False
+    conn_fail_count: int = 0
+    """Consecutive RC failures; only a streak drops the device (WiFi tolerance)."""
+    state_grace_until: float = 0.0
+    """After sending play/pause, skip re-enforcement until VLC's reported state
+    caught up — RC 'pause' toggles, a double-send would flip the state back."""
+    seek_cooldown_s: float = 0.0
+    """Current per-device seek cooldown; doubles on rapid re-corrections."""
 
 
 class Controller:
@@ -128,13 +140,23 @@ class Controller:
 
     # --------------------------------------------------------------- polling
 
+    def _conn_fail(self, vlc_id: VlcId, device: DeviceView):
+        """Tolerate short WiFi hiccups: only a failure streak drops the device.
+
+        A single timed-out command leaves the connection usable (VlcSocket
+        drains the late reply before the next command)."""
+        device.conn_fail_count += 1
+        if device.conn_fail_count >= CONN_FAIL_DROP_AFTER:
+            self._drop_device(vlc_id)
+
     def _poll_positions(self):
         now = time.time()
         for vlc_id, device in list(self.devices.items()):
             try:
                 device.tracker.observe(now, device.vlc.get_seek())
+                device.conn_fail_count = 0
             except VlcConnectionError:
-                self._drop_device(vlc_id)
+                self._conn_fail(vlc_id, device)
                 continue
             device.last_position = device.tracker.est_position(now, device.applied_rate)
 
@@ -142,10 +164,16 @@ class Controller:
         for vlc_id, device in list(self.devices.items()):
             try:
                 self._apply_play_state(device)
+                device.conn_fail_count = 0
             except VlcConnectionError:
-                self._drop_device(vlc_id)
+                self._conn_fail(vlc_id, device)
 
     def _apply_play_state(self, device: DeviceView):
+        now = time.time()
+        if now < device.state_grace_until:
+            # A play/pause command is still settling in VLC; RC 'pause' toggles,
+            # so re-sending based on the stale reported state would flip it back
+            return
         device.play_state = device.vlc.play_state()
         if device.play_state == self.desired_play_state:
             return
@@ -154,11 +182,13 @@ class Controller:
                 device.vlc.play()
                 device.tracker.reset()
                 device.play_state = PlayState.PLAYING
+                device.state_grace_until = now + STATE_CMD_GRACE_S
         elif self.desired_play_state == PlayState.PAUSED:
             if device.play_state == PlayState.PLAYING:
                 device.vlc.pause()  # RC "pause" toggles; only send when playing
                 device.tracker.reset()
                 device.play_state = PlayState.PAUSED
+                device.state_grace_until = now + STATE_CMD_GRACE_S
 
     # ------------------------------------------------------ drift correction
 
@@ -215,13 +245,27 @@ class Controller:
                     self._seek_correct(device, master_pos, length, now)
                 elif self.cfg.rate_nudge:
                     self._rate_nudge(device, drift)
+                device.conn_fail_count = 0
             except VlcConnectionError:
-                self._drop_device(vlc_id)
+                self._conn_fail(vlc_id, device)
 
     def _seek_correct(self, device: DeviceView, master_pos: float, length: int, now: float):
+        # A 4K HEVC seek visibly stalls the decoder, and keyframe granularity
+        # means it may land off-target. Rapid re-corrections therefore back off
+        # exponentially instead of stuttering in a loop.
+        if (device.last_correction_at is not None
+                and now - device.last_correction_at < SEEK_BACKOFF_WINDOW_S):
+            device.seek_cooldown_s = min(
+                max(device.seek_cooldown_s, self.cfg.cooldown_s) * 2,
+                SEEK_COOLDOWN_MAX_S,
+            )
+        else:
+            device.seek_cooldown_s = self.cfg.cooldown_s
+
         target = round(master_pos) % length
         print(f"Drift correction: seek {device.vlc.vlc_id} to {target}s "
-              f"(drift {device.last_drift:+.2f}s)", flush=True)
+              f"(drift {device.last_drift:+.2f}s, next earliest in {device.seek_cooldown_s:.0f}s)",
+              flush=True)
         if device.nudging:
             device.vlc.set_rate(self.desired_rate)
             device.applied_rate = self.desired_rate
@@ -229,19 +273,22 @@ class Controller:
         device.vlc.seek(target)
         device.tracker.reset()
         device.over_threshold_count = 0
-        device.cooldown_until = now + self.cfg.cooldown_s
+        device.cooldown_until = now + device.seek_cooldown_s
         device.last_correction_at = now
 
     def _rate_nudge(self, device: DeviceView, drift: float):
-        """Smoothly pull a slightly-off device back by temporarily skewing its rate."""
+        """Smoothly pull an off-position device back by temporarily skewing its
+        rate — invisible to viewers, unlike a seek."""
         if device.nudging:
             if abs(drift) < NUDGE_DONE_DRIFT:
                 device.vlc.set_rate(self.desired_rate)
                 device.applied_rate = self.desired_rate
                 device.nudging = False
         elif NUDGE_MIN_DRIFT < abs(drift) <= self.cfg.drift_threshold:
+            # Bigger drift -> stronger skew (2..8%), aiming at ~25s convergence
+            strength = min(NUDGE_FACTOR_MAX, max(NUDGE_FACTOR_MIN, abs(drift) / 25))
             # Ahead (drift > 0) -> slow down; behind -> speed up
-            factor = 1 - NUDGE_FACTOR if drift > 0 else 1 + NUDGE_FACTOR
+            factor = 1 - strength if drift > 0 else 1 + strength
             nudge_rate = self.desired_rate * factor
             device.vlc.set_rate(nudge_rate)
             device.applied_rate = nudge_rate
@@ -249,15 +296,22 @@ class Controller:
 
     # ------------------------------------------------------------ web-facing
 
+    def _set_desired_play_state(self, state: PlayState):
+        # A CHANGED desired state lifts the settle grace (the transition is
+        # new); a repeated request keeps it, protecting against double-toggle.
+        if self.desired_play_state != state:
+            self.desired_play_state = state
+            for device in self.devices.values():
+                device.state_grace_until = 0.0
+        self._enforce_play_state()
+
     def play(self):
         with self.lock:
-            self.desired_play_state = PlayState.PLAYING
-            self._enforce_play_state()
+            self._set_desired_play_state(PlayState.PLAYING)
 
     def pause(self):
         with self.lock:
-            self.desired_play_state = PlayState.PAUSED
-            self._enforce_play_state()
+            self._set_desired_play_state(PlayState.PAUSED)
 
     def set_rate(self, rate: float) -> float:
         with self.lock:
@@ -484,10 +538,10 @@ class Controller:
         issues: List[str] = []
         if video.get("checked") and not video.get("present"):
             issues.append(f"Video-Datei fehlt: {video.get('path')}")
+        # NOTE: no warning for unused candidate slots — the config always lists
+        # max_devices slots, but installations may run with any subset of them.
         if expected > 0 and connected == 0:
             issues.append("Kein VLC-Gerät verbunden")
-        elif expected > 0 and connected < expected:
-            issues.append(f"Nur {connected} von {expected} erwarteten Geräten online")
 
         if connected > 0 and not video_length:
             issues.append("Master meldet keine Videolänge (Medium fehlt in VLC?)")

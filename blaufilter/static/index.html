@@ -287,8 +287,7 @@
     healthpill.textContent = h.text;
     healthlabel.textContent = h.label;
 
-    document.getElementById('devcount').textContent =
-      `${st.connected_devices ?? 0} / ${st.expected_devices ?? '—'}`;
+    document.getElementById('devcount').textContent = String(st.connected_devices ?? 0);
     document.getElementById('lastcorr').textContent = fmtAgo(st.last_correction_at);
     document.getElementById('vidlen').textContent = fmtPos(st.video_length);
     document.getElementById('uptime').textContent = fmtUptime(st.uptime_s);

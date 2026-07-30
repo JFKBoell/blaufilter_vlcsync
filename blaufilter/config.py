@@ -21,10 +21,12 @@ class BlaufilterConfig:
     max_devices: int = 6
     web_port: int = 80
     agent_port: int = 4213
-    drift_threshold: float = 0.5
+    drift_threshold: float = 3.0
+    """Seek-correction threshold. Seeks visibly stall 4K HEVC decoding, so they
+    are the last resort; smaller drifts are corrected smoothly via rate nudge."""
     hysteresis_cycles: int = 3
-    cooldown_s: float = 5.0
-    rate_nudge: bool = False
+    cooldown_s: float = 10.0
+    rate_nudge: bool = True
     video_path: str = DEFAULT_VIDEO_PATH
     """Local path of the shared loop video (checked by the web status API)."""
     vlc_unit: str = "blaufilter-vlc"

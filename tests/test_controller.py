@@ -17,9 +17,9 @@ from tests.rc_emulator import EmulatedPlayer, RcServerEmulator
 def stack(request):
     servers, envs = [], []
 
-    def build(players):
+    def build(players, **cfg_overrides):
         servers.extend(RcServerEmulator(p) for p in players)
-        cfg = BlaufilterConfig(dev_hosts=[s.address for s in servers])
+        cfg = BlaufilterConfig(dev_hosts=[s.address for s in servers], **cfg_overrides)
         env = VlcProcs({StaticCandidateFinder(cfg)})
         envs.append(env)
         return servers, Controller(cfg, env)
@@ -93,7 +93,8 @@ def test_drift_triggers_exactly_one_correction(stack):
         EmulatedPlayer(length=3600, start_position=100),
         EmulatedPlayer(length=3600, start_position=100),
     ]
-    servers, controller = stack(players)
+    # Force the seek path: low threshold, no smooth nudge
+    servers, controller = stack(players, drift_threshold=0.5, rate_nudge=False)
 
     assert tick_until(controller, lambda: len(controller.devices) == 2)
     assert tick_until(controller,
@@ -156,6 +157,114 @@ def test_rate_change_causes_no_false_corrections(stack):
     tick_for(controller, 2.0)
     for player in players:
         assert not player.seeks_received()
+
+
+def test_moderate_drift_uses_rate_nudge_not_seek(stack):
+    """Default behavior: drift below the seek threshold is corrected smoothly
+    via a temporary rate skew — no seek, so no visible stutter."""
+    players = [
+        EmulatedPlayer(length=3600, start_position=500),
+        EmulatedPlayer(length=3600, start_position=500),
+    ]
+    servers, controller = stack(players)  # defaults: threshold 3.0, nudge on
+
+    assert tick_until(controller, lambda: len(controller.devices) == 2)
+    assert tick_until(controller,
+                      lambda: all(d.last_position is not None for d in controller.devices.values()))
+
+    (slave_server, slave_device), = slave_pairs(controller, servers)
+    slave_server.player.apply_skew(1.0)  # below threshold -> nudge territory
+
+    assert tick_until(controller, lambda: slave_device.nudging, timeout=8.0), \
+        "moderate drift must trigger a rate nudge"
+    assert slave_server.player.rate != pytest.approx(1.0), "nudge must skew the rate"
+    assert not slave_server.player.seeks_received(), "no seek for moderate drift"
+
+    # Nudge converges: skewed rate pulls the position back until drift is gone,
+    # then the desired rate is restored
+    assert tick_until(controller,
+                      lambda: not slave_device.nudging
+                      and slave_device.last_drift is not None
+                      and abs(slave_device.last_drift) < 0.3,
+                      timeout=60.0)
+    assert slave_server.player.rate == pytest.approx(1.0)
+    assert not slave_server.player.seeks_received()
+
+
+def test_seek_cooldown_backs_off_on_rapid_recorrection(stack):
+    players = [
+        EmulatedPlayer(length=3600, start_position=100),
+        EmulatedPlayer(length=3600, start_position=100),
+    ]
+    servers, controller = stack(players, drift_threshold=0.5, rate_nudge=False,
+                                cooldown_s=1.0)
+
+    assert tick_until(controller, lambda: len(controller.devices) == 2)
+    assert tick_until(controller,
+                      lambda: all(d.last_position is not None for d in controller.devices.values()))
+
+    (slave_server, slave_device), = slave_pairs(controller, servers)
+    slave_server.player.apply_skew(2.0)
+    assert tick_until(controller, lambda: len(slave_server.player.seeks_received()) == 1,
+                      timeout=8.0)
+    first_cooldown = slave_device.seek_cooldown_s
+    assert first_cooldown == pytest.approx(1.0)
+
+    # Immediately drift again: the second correction must back off
+    slave_server.player.apply_skew(2.0)
+    assert tick_until(controller, lambda: len(slave_server.player.seeks_received()) == 2,
+                      timeout=8.0)
+    assert slave_device.seek_cooldown_s > first_cooldown
+
+
+def test_pause_enforcement_does_not_toggle_back(stack):
+    """RC 'pause' toggles. When VLC reports the old state for a moment after the
+    command, re-enforcement must NOT send a second 'pause' (which would resume)."""
+    players = [
+        EmulatedPlayer(length=3600, start_position=10),
+        EmulatedPlayer(length=3600, start_position=10),
+    ]
+    servers, controller = stack(players)
+    assert tick_until(controller, lambda: len(controller.devices) == 2)
+
+    # Freeze the reported state at 'playing' to simulate VLC's settling lag
+    for server in servers:
+        server.player.report_state_override = "playing"
+
+    controller.pause()
+    for _ in range(5):
+        with controller.lock:
+            controller._enforce_play_state()
+
+    for player in (s.player for s in servers):
+        pauses = [c for c in player.received if c.strip() == "pause"]
+        assert len(pauses) == 1, "grace period must prevent double pause-toggle"
+
+    # After the grace expires and VLC reports the real state, no further sends
+    for server in servers:
+        server.player.report_state_override = None
+    for device in controller.devices.values():
+        device.state_grace_until = 0.0
+    with controller.lock:
+        controller._enforce_play_state()
+    for player in (s.player for s in servers):
+        assert len([c for c in player.received if c.strip() == "pause"]) == 1
+
+
+def test_single_connection_error_does_not_drop_device(stack):
+    players = [EmulatedPlayer(length=3600, start_position=10)]
+    servers, controller = stack(players)
+    assert tick_until(controller, lambda: len(controller.devices) == 1)
+
+    device = next(iter(controller.devices.values()))
+    from vlcsync.vlc_socket import VlcConnectionError
+    vlc_id = next(iter(controller.devices))
+    controller._conn_fail(vlc_id, device)
+    assert len(controller.devices) == 1, "first failure must not drop the device"
+    controller._conn_fail(vlc_id, device)
+    assert len(controller.devices) == 1, "second failure must not drop the device"
+    controller._conn_fail(vlc_id, device)
+    assert len(controller.devices) == 0, "third consecutive failure drops it"
 
 
 def test_pause_and_play_fan_out(stack):
