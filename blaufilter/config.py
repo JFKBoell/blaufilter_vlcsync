@@ -8,8 +8,8 @@ from typing import List
 CONFIG_PATH = "/etc/blaufilter/config"
 DEFAULT_VIDEO_PATH = "/opt/blaufilter/video/main.mp4"
 
-RATE_MIN = 0.5
-RATE_MAX = 2.0
+RATE_MIN = 0.1
+RATE_MAX = 3.0
 
 
 @dataclass
@@ -31,6 +31,10 @@ class BlaufilterConfig:
     """Local path of the shared loop video (checked by the web status API)."""
     vlc_unit: str = "blaufilter-vlc"
     """systemd --user unit name restarted after a video swap."""
+    random_start: bool = True
+    """Jump to a random position once playback starts after boot."""
+    debug_pin: str = "1234"
+    """Guards the debug endpoints. Empty string disables the check."""
     dev_hosts: List[str] = field(default_factory=list)
     """Override candidate list, e.g. ["127.0.0.1:5501", "127.0.0.1:5502"] for local dev."""
 
@@ -84,6 +88,8 @@ def load(config_path: str = CONFIG_PATH) -> BlaufilterConfig:
         cfg.rate_nudge = section.getboolean("rate_nudge", cfg.rate_nudge)
         cfg.video_path = section.get("video_path", cfg.video_path)
         cfg.vlc_unit = section.get("vlc_unit", cfg.vlc_unit)
+        cfg.random_start = section.getboolean("random_start", cfg.random_start)
+        cfg.debug_pin = section.get("debug_pin", cfg.debug_pin).strip()
 
     if env_hosts := os.environ.get("BLAUFILTER_HOSTS"):
         cfg.dev_hosts = [h.strip() for h in env_hosts.split(",") if h.strip()]

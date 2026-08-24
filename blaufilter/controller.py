@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import random
 import threading
 import time
 from dataclasses import dataclass, field
@@ -91,6 +92,7 @@ class Controller:
         self.last_video_job: Optional[dict] = None
         self._video_job_lock = threading.Lock()
         self._video_busy = False
+        self._random_start_pending = cfg.random_start
 
     # ------------------------------------------------------------------ loop
 
@@ -111,10 +113,24 @@ class Controller:
     def _tick(self):
         self._tick_count += 1
         self._reconcile_devices()
+        self._maybe_random_start()
         self._poll_positions()
         if self._tick_count % PLAYSTATE_POLL_EVERY_N_TICKS == 0:
             self._enforce_play_state()
         self._correct_drift()
+
+    def _maybe_random_start(self):
+        """Start the loop at a random position once, as soon as the first
+        player reports a video length after boot."""
+        if not self._random_start_pending:
+            return
+        length = self._known_length()
+        if not length:
+            return
+        self._random_start_pending = False
+        target = random.randrange(length)
+        print(f"Random start at {target}s", flush=True)
+        self._seek_all(target)
 
     # ----------------------------------------------------------- reconciling
 
@@ -398,28 +414,46 @@ class Controller:
                     self._drop_device(vlc_id)
 
     def restart_playback(self):
-        """Seek all connected players to 0 and apply the desired play state.
-
-        This does not restart the VLC process — only resets the timeline.
-        """
+        """Seek all connected players to 0 (does not restart the VLC process)."""
         with self.lock:
-            now = time.time()
-            for vlc_id, device in list(self.devices.items()):
-                try:
-                    if device.nudging:
-                        device.vlc.set_rate(self.desired_rate)
-                        device.applied_rate = self.desired_rate
-                        device.nudging = False
-                    device.vlc.seek(0)
-                    device.tracker.reset()
-                    self._note_commanded_seek(device, 0)
-                    device.over_threshold_count = 0
-                    device.cooldown_until = now + self.cfg.cooldown_s
-                    device.last_correction_at = now
-                    device.last_drift = 0.0
-                    self._apply_play_state(device)
-                except VlcConnectionError:
-                    self._drop_device(vlc_id)
+            self._seek_all(0)
+
+    def seek_random(self) -> Optional[int]:
+        """Seek all players to the same random position. Returns it, or None
+        when no device reports a usable video length."""
+        with self.lock:
+            length = self._known_length()
+            if not length:
+                return None
+            target = random.randrange(length)
+            self._seek_all(target)
+            return target
+
+    def _known_length(self) -> Optional[int]:
+        for device in self.devices.values():
+            if device.length:
+                return device.length
+        return None
+
+    def _seek_all(self, position: int):
+        """Put every connected player at the same position. Caller holds the lock."""
+        now = time.time()
+        for vlc_id, device in list(self.devices.items()):
+            try:
+                if device.nudging:
+                    device.vlc.set_rate(self.desired_rate)
+                    device.applied_rate = self.desired_rate
+                    device.nudging = False
+                device.vlc.seek(position)
+                device.tracker.reset()
+                self._note_commanded_seek(device, position)
+                device.over_threshold_count = 0
+                device.cooldown_until = now + self.cfg.cooldown_s
+                device.last_correction_at = now
+                device.last_drift = 0.0
+                self._apply_play_state(device)
+            except VlcConnectionError:
+                self._conn_fail(vlc_id, device)
 
     def _video_info(self) -> dict:
         return video_ops.video_info(self.cfg.video_path)

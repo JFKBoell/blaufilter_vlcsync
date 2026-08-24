@@ -19,6 +19,9 @@ def stack(request):
 
     def build(players, **cfg_overrides):
         servers.extend(RcServerEmulator(p) for p in players)
+        # Off by default: a random start seek would show up in the seek counts
+        # and starting positions the sync tests set up deliberately.
+        cfg_overrides.setdefault("random_start", False)
         cfg = BlaufilterConfig(dev_hosts=[s.address for s in servers], **cfg_overrides)
         env = VlcProcs({StaticCandidateFinder(cfg)})
         envs.append(env)
@@ -300,6 +303,37 @@ def test_single_connection_error_does_not_drop_device(stack):
     assert len(controller.devices) == 1, "second failure must not drop the device"
     controller._conn_fail(vlc_id, device)
     assert len(controller.devices) == 0, "third consecutive failure drops it"
+
+
+def test_seek_random_moves_every_device_to_the_same_spot(stack):
+    players = [
+        EmulatedPlayer(length=3600, start_position=100),
+        EmulatedPlayer(length=3600, start_position=100),
+    ]
+    servers, controller = stack(players)
+    assert tick_until(controller, lambda: len(controller.devices) == 2)
+
+    target = controller.seek_random()
+    assert target is not None and 0 <= target < 3600
+    for server in servers:
+        seeks = server.player.seeks_received()
+        assert seeks, "every device must be moved"
+        assert float(seeks[-1].split()[1]) == pytest.approx(target)
+
+
+def test_random_start_happens_once_after_boot(stack):
+    players = [EmulatedPlayer(length=3600, start_position=100)]
+    servers, controller = stack(players, random_start=True)
+    player = servers[0].player
+
+    assert tick_until(controller, lambda: len(player.seeks_received()) == 1, timeout=8.0), \
+        "playback must start at a random position"
+    start_target = float(player.seeks_received()[0].split()[1])
+    assert 0 <= start_target < 3600
+
+    # It is a one-shot: further ticks must not keep re-randomizing
+    tick_for(controller, 1.5)
+    assert len(player.seeks_received()) == 1
 
 
 def test_pause_and_play_fan_out(stack):

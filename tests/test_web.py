@@ -4,6 +4,9 @@ from blaufilter.config import BlaufilterConfig
 from blaufilter.controller import Controller
 from blaufilter.web import create_app
 
+PIN = BlaufilterConfig.debug_pin
+PIN_HEADERS = {"X-Debug-Pin": PIN}
+
 
 @pytest.fixture
 def client(tmp_path):
@@ -63,11 +66,11 @@ def test_play_pause(client):
 def test_rate_is_clamped(client):
     http, _, _ = client
     resp = http.post("/api/rate", json={"rate": 5.0})
-    assert resp.get_json()["rate"] == 2.0
-    resp = http.post("/api/rate", json={"rate": 0.1})
-    assert resp.get_json()["rate"] == 0.5
-    resp = http.post("/api/rate", json={"rate": 1.25})
-    assert resp.get_json()["rate"] == 1.25
+    assert resp.get_json()["rate"] == 3.0
+    resp = http.post("/api/rate", json={"rate": 0.01})
+    assert resp.get_json()["rate"] == 0.1
+    resp = http.post("/api/rate", json={"rate": 2.75})
+    assert resp.get_json()["rate"] == 2.75
 
 
 def test_rate_rejects_bad_body(client):
@@ -78,16 +81,50 @@ def test_rate_rejects_bad_body(client):
 
 def test_resync_without_devices_is_noop(client):
     http, _, _ = client
-    assert http.post("/api/resync").status_code == 200
+    assert http.post("/api/resync", headers=PIN_HEADERS).status_code == 200
 
 
 def test_restart_playback_without_devices(client):
     http, _, _ = client
-    resp = http.post("/api/restart_playback")
+    resp = http.post("/api/restart_playback", headers=PIN_HEADERS)
     assert resp.status_code == 200
-    body = resp.get_json()
-    assert body["ok"] is True
-    assert "VLC-Neustart" in body["note"]
+    assert resp.get_json()["ok"] is True
+
+
+def test_seek_random_without_length_is_rejected(client):
+    http, _, _ = client
+    resp = http.post("/api/seek_random")
+    assert resp.status_code == 409
+
+
+def test_debug_endpoints_require_pin(client):
+    http, _, _ = client
+    for path in ("/api/resync", "/api/restart_playback", "/api/video/activate"):
+        assert http.post(path).status_code == 403, path
+        assert http.post(path, headers={"X-Debug-Pin": "9999"}).status_code == 403, path
+    assert http.get("/api/video/peers").status_code == 403
+
+    # The everyday controls stay open — the guard is only for maintenance
+    assert http.post("/api/pause").status_code == 200
+    assert http.post("/api/rate", json={"rate": 1.0}).status_code == 200
+    assert http.get("/api/status").status_code == 200
+
+
+def test_debug_unlock(client):
+    http, _, _ = client
+    assert http.post("/api/debug/unlock", json={"pin": PIN}).status_code == 200
+    assert http.post("/api/debug/unlock", json={"pin": "0000"}).status_code == 403
+    assert http.post("/api/debug/unlock", json={}).status_code == 403
+    assert http.get("/api/status").get_json()["debug_pin_required"] is True
+
+
+def test_empty_pin_disables_the_guard(tmp_path):
+    cfg = BlaufilterConfig(max_devices=0, debug_pin="", video_path=str(tmp_path / "v.mp4"))
+    app = create_app(Controller(cfg, env=None))
+    app.testing = True
+    http = app.test_client()
+    assert http.post("/api/resync").status_code == 200
+    assert http.get("/api/status").get_json()["debug_pin_required"] is False
 
 
 def test_index_served(client):
@@ -96,6 +133,7 @@ def test_index_served(client):
     assert resp.status_code == 200
     assert b"Blaufilter" in resp.data
     assert "Geräte".encode("utf-8") in resp.data
+    assert "Zufallsposition".encode("utf-8") in resp.data
     assert "Wiedergabe von vorn".encode("utf-8") in resp.data
     assert "Video austauschen".encode("utf-8") in resp.data
     assert b"/api/video" in resp.data

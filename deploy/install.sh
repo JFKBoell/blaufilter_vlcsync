@@ -22,6 +22,7 @@ export BF_SSID="Blaufilter"
 export BF_PSK="blaufilter"
 export BF_VIDEO=""
 export BF_SPLASH=""
+export BF_PIN="1234"
 export BF_USER="${SUDO_USER:-pi}"
 WIFI_COUNTRY="DE"
 
@@ -33,6 +34,7 @@ while [[ $# -gt 0 ]]; do
         --psk)          BF_PSK="$2"; shift 2 ;;
         --video)        BF_VIDEO="$2"; shift 2 ;;
         --splash)       BF_SPLASH="$2"; shift 2 ;;
+        --pin)          BF_PIN="$2"; shift 2 ;;
         --user)         BF_USER="$2"; shift 2 ;;
         --wifi-country) WIFI_COUNTRY="$2"; shift 2 ;;
         *) echo "Unknown option: $1" >&2; exit 1 ;;
@@ -63,6 +65,7 @@ cat > /etc/blaufilter/config <<EOF
 [blaufilter]
 device_id = $BF_ID
 role = $BF_ROLE
+debug_pin = $BF_PIN
 EOF
 
 BOOT_DIR=/boot/firmware

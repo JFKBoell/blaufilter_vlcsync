@@ -2,126 +2,260 @@
 <html lang="de">
 <head>
 <meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black">
 <title>Blaufilter Steuerung</title>
 <style>
-  :root { color-scheme: dark; }
-  * { box-sizing: border-box; margin: 0; padding: 0; }
-  body {
-    font-family: system-ui, sans-serif;
-    background: #0d1b2a; color: #e0e6ed;
-    display: flex; flex-direction: column; align-items: center;
-    min-height: 100vh; padding: 1.5rem; gap: 1.2rem;
+  :root {
+    color-scheme: dark;
+    --bg: #000000;
+    --fg: #ffffff;
+    --muted: #8a8a8a;
+    --faint: #555555;
+    --line: #2a2a2a;
+    --surface: #101010;
+    --grad-a: #0d3d8f;
+    --grad-b: #4da3ff;
+    --ok: #7bc67e;
+    --warn: #f2b04c;
+    --bad: #e5534b;
   }
-  h1 { font-size: 1.3rem; font-weight: 600; color: #7ab8f5; }
-  .card {
-    background: #16283d; border-radius: 12px; padding: 1.2rem;
-    width: 100%; max-width: 520px;
+  * { box-sizing: border-box; margin: 0; padding: 0; -webkit-tap-highlight-color: transparent; }
+  html, body { height: 100%; }
+  body { font-family: system-ui, sans-serif; background: var(--bg); color: var(--fg); }
+  button { font-family: inherit; }
+  button:focus-visible, input:focus-visible, select:focus-visible, [role=slider]:focus-visible {
+    outline: 2px solid var(--fg); outline-offset: 2px;
   }
-  .card + .card { }
+
+  /* ------------------------------------------------------------ main view */
+  #mainview {
+    height: 100%; display: flex; flex-direction: column; align-items: center;
+    justify-content: center; gap: 5vh; padding: 2rem 1.5rem;
+  }
+  .wordmark {
+    font-size: 0.85rem; font-weight: 600; letter-spacing: 0.45em;
+    text-indent: 0.45em; color: var(--faint); text-transform: uppercase;
+  }
   #playpause {
-    width: 100%; padding: 1.2rem; font-size: 1.5rem; font-weight: 700;
-    border: none; border-radius: 12px; cursor: pointer;
-    background: #2e7d32; color: white;
+    width: min(100%, 30rem); height: min(30vh, 15rem);
+    border: none; border-radius: 28px; cursor: pointer;
+    background: linear-gradient(135deg, var(--grad-a), var(--grad-b));
+    color: var(--fg);
+    display: flex; align-items: center; justify-content: center;
   }
-  #playpause.playing { background: #b26a00; }
-  #playpause:active { filter: brightness(1.2); }
-  .rate-row { display: flex; align-items: center; gap: 0.8rem; margin-top: 0.5rem; }
-  input[type=range] { flex: 1; accent-color: #7ab8f5; height: 2rem; }
-  #rateval { font-variant-numeric: tabular-nums; font-size: 1.2rem; min-width: 4.5rem; text-align: right; }
-  label { font-size: 0.85rem; color: #8fa3b8; text-transform: uppercase; letter-spacing: 0.05em; }
+  #playpause .glyph { font-size: 5rem; line-height: 1; }
+  #playpause:active { filter: brightness(0.85); }
+
+  .speed { width: min(100%, 30rem); display: flex; flex-direction: column; gap: 1rem; }
+  #rateval {
+    font-variant-numeric: tabular-nums; font-size: 2.4rem; font-weight: 250;
+    text-align: center; letter-spacing: 0.02em;
+  }
+  #rateslider {
+    position: relative; width: 100%; height: 4.5rem;
+    border: 1px solid var(--line); border-radius: 10px;
+    background: var(--surface); overflow: hidden;
+    cursor: pointer; touch-action: none;
+  }
+  #rateslider .fill { position: absolute; inset: 0 auto 0 0; width: 30%; background: var(--fg); }
+  .scale {
+    display: flex; justify-content: space-between; padding: 0 0.3rem;
+    font-size: 0.8rem; color: var(--faint); font-variant-numeric: tabular-nums;
+  }
+  .scale span { cursor: pointer; padding: 0.2rem 0.4rem; }
+
+  #randompos {
+    width: min(100%, 30rem); padding: 1rem; font-size: 1.15rem;
+    border: 1px solid var(--line); border-radius: 14px; cursor: pointer;
+    background: transparent; color: var(--fg);
+  }
+  #randompos:active { background: var(--line); }
+
+  #toast {
+    position: fixed; bottom: 4.2rem; left: 50%; transform: translateX(-50%);
+    background: var(--surface); border: 1px solid var(--line); color: var(--fg);
+    border-radius: 999px; padding: 0.5rem 1.1rem; font-size: 0.95rem;
+    font-variant-numeric: tabular-nums; white-space: nowrap; z-index: 6;
+  }
+  #toast[hidden] { display: none; }
+
+  #gear {
+    position: fixed; right: 0.9rem; bottom: 0.9rem;
+    width: 2.8rem; height: 2.8rem; border-radius: 50%;
+    background: transparent; border: none; cursor: pointer;
+    color: var(--faint); font-size: 1.3rem;
+  }
+
+  /* --------------------------------------------------------------- pinpad */
+  #pinview {
+    position: fixed; inset: 0; background: var(--bg); z-index: 10;
+    display: flex; flex-direction: column; align-items: center; justify-content: center;
+    gap: 2rem; padding: 2rem;
+  }
+  #pinview[hidden] { display: none; }
+  .pindots { display: flex; gap: 1rem; height: 1rem; }
+  .pindots i {
+    width: 0.9rem; height: 0.9rem; border-radius: 50%;
+    border: 1px solid var(--muted); background: transparent;
+  }
+  .pindots i.on { background: var(--fg); border-color: var(--fg); }
+  .pindots.wrong i { border-color: var(--bad); background: var(--bad); }
+  .pinpad { display: grid; grid-template-columns: repeat(3, 4.6rem); gap: 0.9rem; }
+  .pinpad button {
+    width: 4.6rem; height: 4.6rem; border-radius: 50%;
+    border: 1px solid var(--line); background: var(--surface); color: var(--fg);
+    font-size: 1.5rem; cursor: pointer;
+  }
+  .pinpad button:active { background: var(--line); }
+  .pinpad .aux { font-size: 1rem; color: var(--muted); }
+
+  /* ---------------------------------------------------------------- debug */
+  #debugview {
+    min-height: 100%; display: flex; flex-direction: column; align-items: center;
+    gap: 1rem; padding: 1.2rem 1.2rem 3rem;
+  }
+  #debugview[hidden], #mainview[hidden] { display: none; }
+  .debughead {
+    width: 100%; max-width: 520px; display: flex; align-items: center;
+    justify-content: space-between; padding: 0.2rem 0;
+  }
+  .debughead h1 {
+    font-size: 0.85rem; font-weight: 600; letter-spacing: 0.3em; text-indent: 0.3em;
+    text-transform: uppercase; color: var(--muted);
+  }
+  #closedebug {
+    border: 1px solid var(--line); background: transparent; color: var(--fg);
+    border-radius: 8px; padding: 0.45rem 1rem; font-size: 0.9rem; cursor: pointer;
+  }
+  .card {
+    background: var(--surface); border: 1px solid var(--line); border-radius: 12px;
+    padding: 1.1rem; width: 100%; max-width: 520px;
+  }
+  label { font-size: 0.8rem; color: var(--muted); text-transform: uppercase; letter-spacing: 0.05em; }
+  .tablewrap { overflow-x: auto; }
   table { width: 100%; border-collapse: collapse; margin-top: 0.5rem; }
   th, td { text-align: left; padding: 0.4rem 0.5rem; font-size: 0.9rem; }
-  th { color: #8fa3b8; font-weight: 500; border-bottom: 1px solid #2a3f57; }
+  th { color: var(--muted); font-weight: 500; border-bottom: 1px solid var(--line); }
   td { font-variant-numeric: tabular-nums; }
-  tr.offline td { color: #6b7c8f; }
-  .drift-ok { color: #66bb6a; }
-  .drift-warn { color: #ffb74d; }
-  .drift-bad { color: #ef5350; }
+  tr.offline td { color: var(--faint); }
+  .drift-ok { color: var(--ok); }
+  .drift-warn { color: var(--warn); }
+  .drift-bad { color: var(--bad); }
   .badge {
-    font-size: 0.7rem; background: #7ab8f5; color: #0d1b2a;
+    font-size: 0.7rem; background: var(--fg); color: var(--bg);
     border-radius: 4px; padding: 0.1rem 0.3rem; margin-left: 0.3rem;
   }
   .badge-off {
-    font-size: 0.7rem; background: #2a3f57; color: #8fa3b8;
+    font-size: 0.7rem; background: var(--line); color: var(--muted);
     border-radius: 4px; padding: 0.1rem 0.3rem; margin-left: 0.3rem;
   }
   .actions { display: flex; flex-direction: column; gap: 0.5rem; margin-top: 0.8rem; }
   .actions button {
     width: 100%; padding: 0.7rem; font-size: 1rem;
-    border: 1px solid #2a3f57; border-radius: 8px; cursor: pointer;
-    background: transparent; color: #7ab8f5;
+    border: 1px solid var(--line); border-radius: 8px; cursor: pointer;
+    background: transparent; color: var(--fg);
   }
-  .actions button:active { filter: brightness(1.2); }
-  #conn { font-size: 0.8rem; color: #8fa3b8; }
-  #conn.offline { color: #ef5350; }
-  .health {
-    display: flex; flex-wrap: wrap; gap: 0.6rem; align-items: center;
-    justify-content: space-between;
-  }
+  .actions button:active { background: var(--line); }
+  #conn { font-size: 0.8rem; color: var(--muted); }
+  #conn.offline { color: var(--bad); }
+  .health { display: flex; gap: 0.6rem; align-items: center; justify-content: space-between; }
   .pill {
     display: inline-block; font-size: 0.8rem; font-weight: 600;
     border-radius: 999px; padding: 0.25rem 0.7rem; text-transform: uppercase;
-    letter-spacing: 0.04em;
+    letter-spacing: 0.04em; border: 1px solid var(--line); color: var(--muted);
   }
-  .pill-ok { background: #1b4332; color: #66bb6a; }
-  .pill-degraded { background: #4a3700; color: #ffb74d; }
-  .pill-offline { background: #4a1515; color: #ef5350; }
-  .stats {
-    display: grid; grid-template-columns: 1fr 1fr; gap: 0.6rem; margin-top: 0.9rem;
-  }
-  .stat {
-    background: #0d1b2a; border-radius: 8px; padding: 0.7rem 0.8rem;
-  }
-  .stat .k { font-size: 0.75rem; color: #8fa3b8; text-transform: uppercase; }
+  .pill-ok { border-color: var(--ok); color: var(--ok); }
+  .pill-degraded { border-color: var(--warn); color: var(--warn); }
+  .pill-offline { border-color: var(--bad); color: var(--bad); }
+  .stats { display: grid; grid-template-columns: 1fr 1fr; gap: 0.6rem; margin-top: 0.9rem; }
+  .stat { background: var(--bg); border: 1px solid var(--line); border-radius: 8px; padding: 0.7rem 0.8rem; }
+  .stat .k { font-size: 0.72rem; color: var(--muted); text-transform: uppercase; }
   .stat .v { font-size: 1.15rem; font-variant-numeric: tabular-nums; margin-top: 0.15rem; }
   #issues {
     margin-top: 0.8rem; padding: 0.7rem 0.8rem; border-radius: 8px;
-    background: #4a1515; color: #ffcdd2; font-size: 0.9rem;
-    display: none;
+    border: 1px solid var(--bad); color: var(--bad); font-size: 0.9rem; display: none;
   }
   #issues.visible { display: block; }
   #issues ul { margin: 0.4rem 0 0 1.1rem; }
-  #issues li { margin: 0.2rem 0; }
-  .meta { font-size: 0.8rem; color: #8fa3b8; margin-top: 0.7rem; line-height: 1.4; }
-  .hint {
-    margin-top: 0.6rem; font-size: 0.75rem; color: #6b7c8f; line-height: 1.35;
+  .meta {
+    font-size: 0.8rem; color: var(--muted); margin-top: 0.7rem; line-height: 1.4;
+    overflow-wrap: anywhere;
   }
-  .upload-row {
-    display: flex; flex-direction: column; gap: 0.6rem; margin-top: 0.5rem;
-  }
-  .upload-row input[type=file] {
-    width: 100%; font-size: 0.9rem; color: #e0e6ed;
-  }
+  .upload-row { display: flex; flex-direction: column; gap: 0.6rem; margin-top: 0.5rem; }
+  .upload-row input[type=file] { width: 100%; font-size: 0.9rem; color: var(--fg); }
   .upload-row select {
-    background: #0d1b2a; color: #e0e6ed; border: 1px solid #2a3f57;
-    border-radius: 6px; padding: 0.4rem 0.5rem; font-size: 0.95rem;
+    background: var(--bg); color: var(--fg); border: 1px solid var(--line);
+    border-radius: 6px; padding: 0.5rem; font-size: 0.95rem;
   }
   .check {
-    display: flex; align-items: center; gap: 0.5rem; font-size: 0.9rem; color: #c5d4e3;
+    display: flex; align-items: center; gap: 0.5rem; font-size: 0.9rem; color: var(--fg);
     text-transform: none; letter-spacing: 0;
   }
+  .check input { width: 1.1rem; height: 1.1rem; accent-color: var(--fg); }
   #uploadbtn {
-    width: 100%; padding: 0.7rem; font-size: 1rem;
+    width: 100%; padding: 0.75rem; font-size: 1rem; font-weight: 600;
     border: none; border-radius: 8px; cursor: pointer;
-    background: #1b4f72; color: #e0e6ed; font-weight: 600;
+    background: var(--fg); color: var(--bg);
   }
-  #uploadbtn:disabled { opacity: 0.5; cursor: wait; }
-  #videostatus {
-    margin-top: 0.7rem; font-size: 0.85rem; color: #8fa3b8; line-height: 1.4;
+  #uploadbtn:disabled { opacity: 0.4; cursor: wait; }
+  #uploadbtn:active { filter: brightness(0.85); }
+  #videostatus { margin-top: 0.7rem; font-size: 0.85rem; color: var(--muted); line-height: 1.4; }
+  .ok { color: var(--ok); }
+  .fail { color: var(--bad); }
+
+  @media (prefers-reduced-motion: no-preference) {
+    .pindots.wrong { animation: shake 0.3s; }
+    @keyframes shake {
+      25% { transform: translateX(-6px); } 75% { transform: translateX(6px); }
+    }
   }
-  #videostatus table { margin-top: 0.4rem; }
-  .ok { color: #66bb6a; }
-  .fail { color: #ef5350; }
 </style>
 </head>
 <body>
-  <h1>Blaufilter Videosteuerung</h1>
 
-  <div class="card" id="ops">
+<main id="mainview">
+  <div class="wordmark">Blaufilter</div>
+  <button id="playpause" aria-label="Play"><span class="glyph">▶</span></button>
+  <div class="speed">
+    <div id="rateval">1.00×</div>
+    <div id="rateslider" role="slider" tabindex="0" aria-label="Geschwindigkeit"
+         aria-valuemin="0.1" aria-valuemax="3" aria-valuenow="1" aria-valuetext="1.00×">
+      <div class="fill"></div>
+    </div>
+    <div class="scale">
+      <span data-rate="0.1">0.1×</span><span data-rate="1.0">1.0×</span>
+      <span data-rate="2.0">2.0×</span><span data-rate="3.0">3.0×</span>
+    </div>
+  </div>
+  <button id="randompos">⤨&nbsp;&nbsp;Zufallsposition</button>
+  <div id="toast" hidden></div>
+  <button id="gear" aria-label="Debug öffnen">⚙</button>
+</main>
+
+<div id="pinview" hidden>
+  <div class="pindots" id="pindots"><i></i><i></i><i></i><i></i></div>
+  <div class="pinpad" id="pinpad">
+    <button>1</button><button>2</button><button>3</button>
+    <button>4</button><button>5</button><button>6</button>
+    <button>7</button><button>8</button><button>9</button>
+    <button class="aux" data-k="back">←</button><button>0</button>
+    <button class="aux" data-k="esc">✕</button>
+  </div>
+</div>
+
+<section id="debugview" hidden>
+  <div class="debughead">
+    <h1>Debug</h1>
+    <button id="closedebug">Schließen</button>
+  </div>
+
+  <div class="card">
     <div class="health">
       <span id="healthpill" class="pill pill-offline">…</span>
-      <span id="healthlabel" style="font-size:0.9rem;color:#8fa3b8">Status</span>
+      <span id="healthlabel" style="font-size:0.9rem;color:var(--muted)">Status</span>
     </div>
     <div class="stats">
       <div class="stat"><div class="k">Geräte</div><div class="v" id="devcount">—</div></div>
@@ -134,14 +268,16 @@
   </div>
 
   <div class="card">
-    <button id="playpause">…</button>
-  </div>
-
-  <div class="card">
-    <label for="rate">Geschwindigkeit</label>
-    <div class="rate-row">
-      <input type="range" id="rate" min="0.5" max="2.0" step="0.05" value="1.0">
-      <span id="rateval">1.00×</span>
+    <label>Geräte</label>
+    <div class="tablewrap">
+      <table>
+        <thead><tr><th>ID</th><th>Adresse</th><th>Position</th><th>Drift</th></tr></thead>
+        <tbody id="devices"><tr><td colspan="4">—</td></tr></tbody>
+      </table>
+    </div>
+    <div class="actions">
+      <button id="resync">Jetzt neu synchronisieren</button>
+      <button id="restart">Wiedergabe von vorn</button>
     </div>
   </div>
 
@@ -159,37 +295,17 @@
       <button type="button" id="uploadbtn">Video verteilen</button>
     </div>
     <div id="videostatus"></div>
-    <p class="hint">
-      „Alle Geräte“ ersetzt <code>/opt/blaufilter/video/main.mp4</code> überall mit derselben
-      Datei; mit einem einzelnen Ziel bekommt nur dieses Gerät das Video (so kann jedes Gerät
-      ein eigenes Video zeigen — <strong>alle Videos müssen gleich lang sein</strong>, sonst
-      passt die Synchronisation nicht). Offline-Geräte werden übersprungen. 4K-Dateien über
-      2,4‑GHz-WLAN können mehrere Minuten dauern.
-    </p>
-  </div>
-
-  <div class="card">
-    <label>Geräte</label>
-    <table>
-      <thead><tr><th>ID</th><th>Adresse</th><th>Position</th><th>Drift</th></tr></thead>
-      <tbody id="devices"><tr><td colspan="4">—</td></tr></tbody>
-    </table>
-    <div class="actions">
-      <button id="resync">Jetzt neu synchronisieren</button>
-      <button id="restart">Wiedergabe von vorn</button>
-    </div>
-    <p class="hint">
-      „Von vorn“ setzt nur die Position auf 0. Ein vollständiger VLC-Neustart passiert
-      automatisch beim Video-Austausch (Checkbox oben).
-    </p>
   </div>
 
   <div id="conn">verbinde…</div>
+</section>
 
 <script>
 (function () {
   const btn = document.getElementById('playpause');
-  const slider = document.getElementById('rate');
+  const glyph = btn.querySelector('.glyph');
+  const sliderEl = document.getElementById('rateslider');
+  const fillEl = sliderEl.querySelector('.fill');
   const rateval = document.getElementById('rateval');
   const devicesEl = document.getElementById('devices');
   const conn = document.getElementById('conn');
@@ -198,9 +314,17 @@
   const issuesEl = document.getElementById('issues');
   const uploadbtn = document.getElementById('uploadbtn');
   const videostatus = document.getElementById('videostatus');
+  const mainview = document.getElementById('mainview');
+  const debugview = document.getElementById('debugview');
+  const pinview = document.getElementById('pinview');
+  const pindots = document.getElementById('pindots');
+  const toast = document.getElementById('toast');
   let playState = null;
   let sliderBusy = false;
   let uploading = false;
+  let pinRequired = true;
+
+  const RATE_MIN = 0.1, RATE_MAX = 3.0, RATE_SPAN = RATE_MAX - RATE_MIN;
 
   const HEALTH = {
     ok: { pill: 'pill-ok', text: 'OK', label: 'Synchron' },
@@ -247,20 +371,41 @@
     return `<td class="${cls}">${ms > 0 ? '+' : ''}${ms} ms</td>`;
   }
 
+  let toastTimer = null;
+  function showToast(text) {
+    toast.textContent = text;
+    toast.hidden = false;
+    clearTimeout(toastTimer);
+    toastTimer = setTimeout(() => { toast.hidden = true; }, 2500);
+  }
+
+  /* --------------------------------------------------------- debug access */
+  function storedPin() {
+    try { return sessionStorage.getItem('bf-pin') || ''; } catch (e) { return ''; }
+  }
+  function storePin(pin) {
+    try { sessionStorage.setItem('bf-pin', pin); } catch (e) { /* private mode */ }
+  }
+  function debugFetch(url, opts) {
+    const o = Object.assign({}, opts);
+    o.headers = Object.assign({ 'X-Debug-Pin': storedPin() }, o.headers || {});
+    return fetch(url, o);
+  }
+
   function renderJob(job) {
     if (!job) {
       if (!uploading) videostatus.textContent = '';
       return;
     }
-    const phase = job.phase || '';
-    let html = `<div>Letzter Job: <strong>${phase}</strong>` +
+    let html = `<div>Letzter Job: <strong>${job.phase || ''}</strong>` +
       (job.ok ? ' <span class="ok">OK</span>' : ' <span class="fail">Fehler</span>') + '</div>';
     if (job.error) html += `<div class="fail">${job.error}</div>`;
     const rows = (job.distribute || []).concat(
-      (job.activate || []).map(r => Object.assign({kind: 'vlc'}, r))
+      (job.activate || []).map(r => Object.assign({ kind: 'vlc' }, r))
     );
     if (rows.length) {
-      html += '<table><thead><tr><th>Gerät</th><th>Status</th><th>Detail</th></tr></thead><tbody>';
+      html += '<div class="tablewrap"><table><thead><tr><th>Gerät</th><th>Status</th>' +
+        '<th>Detail</th></tr></thead><tbody>';
       html += rows.map(r => {
         const detail = r.error || r.message || (r.video && r.video.fingerprint) || '';
         const label = r.kind === 'vlc' ? 'VLC' : 'Datei';
@@ -268,19 +413,18 @@
           `<td class="${r.ok ? 'ok' : 'fail'}">${label}: ${r.ok ? 'ok' : 'fail'}</td>` +
           `<td>${detail}</td></tr>`;
       }).join('');
-      html += '</tbody></table>';
+      html += '</tbody></table></div>';
     }
     videostatus.innerHTML = html;
   }
 
   function render(st) {
     playState = st.play_state;
-    btn.textContent = playState === 'playing' ? '⏸ Pause' : '▶ Play';
-    btn.classList.toggle('playing', playState === 'playing');
-    if (!sliderBusy) {
-      slider.value = st.rate;
-      rateval.textContent = Number(st.rate).toFixed(2) + '×';
-    }
+    const playing = playState === 'playing';
+    glyph.textContent = playing ? '⏸' : '▶';
+    btn.setAttribute('aria-label', playing ? 'Pause' : 'Play');
+    if (!sliderBusy) setRateUI(st.rate);
+    pinRequired = st.debug_pin_required !== false;
 
     const h = HEALTH[st.health] || HEALTH.offline;
     healthpill.className = 'pill ' + h.pill;
@@ -306,8 +450,7 @@
     if (!v.checked) {
       document.getElementById('videometa').textContent = 'Video: Prüfung deaktiviert';
     } else if (!v.present) {
-      document.getElementById('videometa').textContent =
-        'Video fehlt: ' + (v.path || '—');
+      document.getElementById('videometa').textContent = 'Video fehlt: ' + (v.path || '—');
     } else {
       const parts = [v.path, fmtBytes(v.size_bytes)];
       if (v.fingerprint) parts.push('ID ' + v.fingerprint);
@@ -315,12 +458,9 @@
     }
 
     if (!uploading) renderJob(st.last_video_job);
-
     uploadbtn.disabled = uploading || !!st.video_busy;
 
     const rows = st.devices || [];
-
-    // Upload-target dropdown: "all" + every connected device, keep selection
     const sel = document.getElementById('uploadtarget');
     const optHtml = ['<option value="all">Ziel: Alle Geräte</option>'].concat(
       rows.filter(d => d.connected && d.id != null).map(d =>
@@ -371,27 +511,83 @@
     fetch(playState === 'playing' ? '/api/pause' : '/api/play', { method: 'POST' }).then(poll);
   });
 
-  slider.addEventListener('input', () => {
-    sliderBusy = true;
-    rateval.textContent = Number(slider.value).toFixed(2) + '×';
-  });
-  slider.addEventListener('change', () => {
+  /* ------------------------------------------------------------- rate bar */
+  let currentRate = 1.0;
+  function setRateUI(v) {
+    currentRate = Math.min(RATE_MAX, Math.max(RATE_MIN, Number(v)));
+    fillEl.style.width = ((currentRate - RATE_MIN) / RATE_SPAN * 100) + '%';
+    rateval.textContent = currentRate.toFixed(2) + '×';
+    sliderEl.setAttribute('aria-valuenow', String(currentRate));
+    sliderEl.setAttribute('aria-valuetext', currentRate.toFixed(2) + '×');
+  }
+  function sendRate(v) {
     fetch('/api/rate', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ rate: Number(slider.value) })
+      body: JSON.stringify({ rate: Number(v) })
     }).finally(() => { sliderBusy = false; poll(); });
+  }
+  function rateFromX(clientX) {
+    const rect = sliderEl.getBoundingClientRect();
+    const frac = Math.min(1, Math.max(0, (clientX - rect.left) / rect.width));
+    return Math.round((RATE_MIN + frac * RATE_SPAN) / 0.05) * 0.05;
+  }
+  let dragging = false;
+  sliderEl.addEventListener('pointerdown', (ev) => {
+    dragging = true;
+    sliderBusy = true;
+    sliderEl.setPointerCapture(ev.pointerId);
+    setRateUI(rateFromX(ev.clientX));
+  });
+  sliderEl.addEventListener('pointermove', (ev) => {
+    if (dragging) setRateUI(rateFromX(ev.clientX));
+  });
+  function endDrag() {
+    if (!dragging) return;
+    dragging = false;
+    sendRate(currentRate);
+  }
+  sliderEl.addEventListener('pointerup', endDrag);
+  sliderEl.addEventListener('pointercancel', endDrag);
+  sliderEl.addEventListener('keydown', (ev) => {
+    const stepMap = { ArrowLeft: -0.05, ArrowRight: 0.05, ArrowDown: -0.05, ArrowUp: 0.05 };
+    let v = null;
+    if (ev.key in stepMap) v = currentRate + stepMap[ev.key];
+    else if (ev.key === 'Home') v = RATE_MIN;
+    else if (ev.key === 'End') v = RATE_MAX;
+    if (v == null) return;
+    ev.preventDefault();
+    sliderBusy = true;
+    setRateUI(v);
+    sendRate(currentRate);
+  });
+  document.querySelectorAll('.scale span').forEach(el => {
+    el.addEventListener('click', () => {
+      sliderBusy = true;
+      setRateUI(el.dataset.rate);
+      sendRate(currentRate);
+    });
   });
 
-  document.getElementById('resync').addEventListener('click', () => {
-    fetch('/api/resync', { method: 'POST' }).then(poll);
-  });
-
-  document.getElementById('restart').addEventListener('click', async () => {
-    const r = await fetch('/api/restart_playback', { method: 'POST' });
-    const body = await r.json().catch(() => ({}));
-    if (body.note) conn.textContent = body.note;
+  document.getElementById('randompos').addEventListener('click', async () => {
+    try {
+      const r = await fetch('/api/seek_random', { method: 'POST' });
+      const body = await r.json().catch(() => ({}));
+      showToast(body.position != null
+        ? 'Start bei ' + fmtPos(body.position)
+        : (body.error || 'Sprung nicht möglich'));
+    } catch (e) {
+      showToast('keine Verbindung');
+    }
     poll();
+  });
+
+  /* ------------------------------------------------------- debug controls */
+  document.getElementById('resync').addEventListener('click', () => {
+    debugFetch('/api/resync', { method: 'POST' }).then(poll);
+  });
+  document.getElementById('restart').addEventListener('click', () => {
+    debugFetch('/api/restart_playback', { method: 'POST' }).then(poll);
   });
 
   uploadbtn.addEventListener('click', async () => {
@@ -401,17 +597,17 @@
       videostatus.innerHTML = '<span class="fail">Bitte eine Videodatei wählen.</span>';
       return;
     }
+    const sel = document.getElementById('uploadtarget');
+    const targetLabel = sel.options[sel.selectedIndex].textContent;
+    if (!window.confirm(`„${file.name}“ verteilen?\n${targetLabel}`)) return;
     const activate = document.getElementById('activatevlc').checked;
     uploading = true;
     uploadbtn.disabled = true;
     uploadbtn.textContent = 'Verteile…';
-    videostatus.textContent = 'Upload läuft — bei großen Dateien bitte warten…';
-    conn.textContent = 'Video-Upload aktiv…';
-    const target = document.getElementById('uploadtarget').value || 'all';
+    videostatus.textContent = 'Upload läuft…';
     try {
-      // Raw PUT streams the file without multipart re-buffering on the host
-      const r = await fetch('/api/video?activate=' + (activate ? '1' : '0') +
-                            '&target=' + encodeURIComponent(target), {
+      const r = await debugFetch('/api/video?activate=' + (activate ? '1' : '0') +
+                                 '&target=' + encodeURIComponent(sel.value || 'all'), {
         method: 'PUT',
         headers: { 'Content-Type': 'application/octet-stream' },
         body: file,
@@ -426,6 +622,59 @@
       uploading = false;
       uploadbtn.textContent = 'Video verteilen';
       poll();
+    }
+  });
+
+  /* ------------------------------------------------------- debug PIN gate */
+  let entered = '';
+
+  function renderDots() {
+    [...pindots.children].forEach((dot, i) => dot.classList.toggle('on', i < entered.length));
+  }
+  function openDebug() {
+    pinview.hidden = true;
+    mainview.hidden = true;
+    debugview.hidden = false;
+  }
+  function closeAll() {
+    pinview.hidden = true;
+    debugview.hidden = true;
+    mainview.hidden = false;
+  }
+  function rejectPin() {
+    pindots.classList.add('wrong');
+    setTimeout(() => { entered = ''; renderDots(); pindots.classList.remove('wrong'); }, 500);
+  }
+
+  document.getElementById('gear').addEventListener('click', () => {
+    if (!pinRequired || storedPin()) { openDebug(); return; }
+    entered = '';
+    renderDots();
+    pindots.classList.remove('wrong');
+    pinview.hidden = false;
+  });
+  document.getElementById('closedebug').addEventListener('click', closeAll);
+
+  document.getElementById('pinpad').addEventListener('click', async (ev) => {
+    const b = ev.target.closest('button');
+    if (!b) return;
+    const k = b.dataset.k;
+    if (k === 'esc') { closeAll(); return; }
+    pindots.classList.remove('wrong');
+    if (k === 'back') { entered = entered.slice(0, -1); renderDots(); return; }
+    if (entered.length >= 4) return;
+    entered += b.textContent.trim();
+    renderDots();
+    if (entered.length < 4) return;
+    try {
+      const r = await fetch('/api/debug/unlock', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ pin: entered }),
+      });
+      if (r.ok) { storePin(entered); openDebug(); } else rejectPin();
+    } catch (e) {
+      rejectPin();
     }
   });
 

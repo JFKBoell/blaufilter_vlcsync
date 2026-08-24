@@ -16,6 +16,8 @@ from blaufilter.distribute import distribute_video, probe_agent_videos
 from blaufilter import video_ops
 from blaufilter.web import create_app
 
+PIN_HEADERS = {"X-Debug-Pin": BlaufilterConfig.debug_pin}
+
 
 def test_atomic_replace_from_stream(tmp_path):
     dest = tmp_path / "main.mp4"
@@ -161,6 +163,7 @@ def test_web_video_upload_raw_put(tmp_path):
         "/api/video?activate=0",
         data=b"raw-put-bytes",
         content_type="application/octet-stream",
+        headers=PIN_HEADERS,
     )
     assert resp.status_code == 200
     assert resp.get_json()["ok"] is True
@@ -200,6 +203,7 @@ def test_web_video_upload_to_single_target(tmp_path):
         "/api/video?activate=0&target=2",
         data=b"only-for-device-2",
         content_type="application/octet-stream",
+        headers=PIN_HEADERS,
     )
     assert resp.status_code == 200, resp.get_json()
     body = resp.get_json()
@@ -226,6 +230,7 @@ def test_web_video_upload_target_unreachable(tmp_path):
         "/api/video?activate=0&target=2",
         data=b"nobody-home",
         content_type="application/octet-stream",
+        headers=PIN_HEADERS,
     )
     assert resp.status_code == 207
     body = resp.get_json()
@@ -233,7 +238,7 @@ def test_web_video_upload_target_unreachable(tmp_path):
     assert body["job"]["distribute"][0]["ok"] is False
 
     resp = client.put("/api/video?activate=0&target=99", data=b"x",
-                      content_type="application/octet-stream")
+                      content_type="application/octet-stream", headers=PIN_HEADERS)
     assert resp.status_code == 400
 
 
@@ -264,6 +269,7 @@ def test_web_video_upload_local_only(tmp_path):
         "/api/video?activate=0",
         data=data,
         content_type="multipart/form-data",
+        headers=PIN_HEADERS,
     )
     assert resp.status_code == 200
     body = resp.get_json()

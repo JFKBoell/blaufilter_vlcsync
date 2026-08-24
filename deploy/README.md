@@ -71,7 +71,8 @@ sudo reboot
 Optionen: `--ssid` (Standard `Blaufilter`), `--psk` (min. 8 Zeichen, Standard
 `blaufilter` — **ändern!**), `--role host|client` (Standard: ID 1 = host),
 `--user` (Standard: der aufrufende Benutzer), `--wifi-country` (Standard `DE`),
-`--splash bild.png` (eigener Bootscreen, siehe unten).
+`--splash bild.png` (eigener Bootscreen, siehe unten), `--pin` (PIN der
+Debug-Seite, Standard `1234`).
 Ohne `--video` das Video später manuell nach `/opt/blaufilter/video/main.mp4`
 kopieren.
 
@@ -112,13 +113,35 @@ geht immer.
 Mit dem WLAN `Blaufilter` verbinden und **http://blaufilter.local** öffnen
 (Fallback, falls die Namensauflösung am Gerät klemmt: `http://192.168.4.1`):
 
+### Hauptseite
+
+Bewusst auf drei Bedienelemente reduziert — geeignet für Touch-Panels:
+
 - **Play/Pause** — wirkt auf alle Geräte gleichzeitig.
-- **Geschwindigkeit** 0,5×–2,0× in 0,05er-Schritten.
+- **Geschwindigkeit** 0,1×–3,0× in 0,05er-Schritten. Der Balken zeigt den Wert
+  als Füllstand; hineintippen oder ziehen, die Marken darunter sind Schnellwahl.
+  Ab etwa 2× kann der Pi bei 4K-Material Einzelbilder auslassen — die Geräte
+  bleiben trotzdem synchron.
+- **Zufallsposition** — alle Geräte springen gemeinsam an dieselbe zufällige
+  Stelle. Beim Hochfahren passiert das automatisch, sobald das erste Gerät eine
+  Videolänge meldet (abschaltbar mit `random_start = no`).
+
+### Debug-Seite
+
+Über das Zahnrad unten rechts, geschützt durch eine vierstellige PIN
+(Standard **1234**, änderbar über `debug_pin` in `/etc/blaufilter/config`;
+leerer Wert schaltet die Abfrage ab). Die PIN hält Unbefugte von den
+gefährlichen Funktionen fern, ist aber **keine Transportverschlüsselung** —
+das Web-UI läuft über einfaches HTTP im geschlossenen WLAN.
+
+- **Statuspanel** — Zustand, verbundene Geräte, letzte Korrektur, Videolänge,
+  Laufzeit des Controllers und die aktuelle Videodatei.
 - **Gerätetabelle** — zeigt pro Gerät Position und aktuellen Drift (grün
   < 250 ms, orange < 500 ms, rot darüber). Das Master-Gerät ist markiert.
   Offline-Kandidaten erscheinen grau.
 - **Jetzt neu synchronisieren** — erzwingt sofortigen Seek aller Geräte auf
   die Master-Position.
+- **Wiedergabe von vorn** — setzt alle Geräte auf Position 0.
 - **Video austauschen** — Datei im Web-UI wählen, Ziel bestimmen und „Video
   verteilen“: Bei **„Alle Geräte“** wird `/opt/blaufilter/video/main.mp4` auf
   dem Host ersetzt und per WLAN an alle erreichbaren Clients kopiert (Agent
@@ -152,8 +175,9 @@ Mit dem WLAN `Blaufilter` verbinden und **http://blaufilter.local** öffnen
   2,4-GHz-WLAN) werden toleriert; erst drei Fehler in Folge gelten als
   Verbindungsabriss. So setzt der Sync bei kurzen Funkstörungen nicht aus.
 
-Schwellen sind in `/etc/blaufilter/config` übersteuerbar
-(`drift_threshold`, `hysteresis_cycles`, `cooldown_s`, `rate_nudge`, `web_port`).
+Einstellbar in `/etc/blaufilter/config`: `drift_threshold`,
+`hysteresis_cycles`, `cooldown_s`, `rate_nudge`, `web_port`, `random_start`,
+`debug_pin`.
 Ruckelt es trotzdem periodisch: prüfen, ob das Video mit kurzem
 Keyframe-Abstand (GOP ≤ 2 s) kodiert ist — Seeks landen sonst weit daneben
 und provozieren Folgekorrekturen.

@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import functools
+import hmac
 import os
 
 from flask import Flask, jsonify, request, send_from_directory
@@ -8,6 +10,7 @@ from blaufilter.controller import Controller
 from blaufilter import distribute as video_distribute
 
 STATIC_DIR = os.path.join(os.path.dirname(__file__), "static")
+PIN_HEADER = "X-Debug-Pin"
 
 
 def create_app(controller: Controller) -> Flask:
@@ -15,13 +18,42 @@ def create_app(controller: Controller) -> Flask:
     # Large 4K uploads over Wi‑Fi — no Flask default limit
     app.config["MAX_CONTENT_LENGTH"] = None
 
+    def pin_ok(candidate: str) -> bool:
+        expected = controller.cfg.debug_pin
+        if not expected:
+            return True
+        return hmac.compare_digest(str(candidate or ""), expected)
+
+    def require_pin(view):
+        """Guard for the maintenance endpoints reachable from the debug page.
+
+        This keeps the destructive controls out of reach of anyone who just
+        joined the WiFi — it is not transport security (plain HTTP on a closed
+        network), so keep the PIN out of anything internet-facing.
+        """
+        @functools.wraps(view)
+        def wrapper(*args, **kwargs):
+            if not pin_ok(request.headers.get(PIN_HEADER)):
+                return jsonify({"error": "PIN erforderlich"}), 403
+            return view(*args, **kwargs)
+        return wrapper
+
     @app.get("/")
     def index():
         return send_from_directory(STATIC_DIR, "index.html")
 
     @app.get("/api/status")
     def status():
-        return jsonify(controller.status_snapshot())
+        snapshot = controller.status_snapshot()
+        snapshot["debug_pin_required"] = bool(controller.cfg.debug_pin)
+        return jsonify(snapshot)
+
+    @app.post("/api/debug/unlock")
+    def debug_unlock():
+        body = request.get_json(silent=True) or {}
+        if not pin_ok(body.get("pin")):
+            return jsonify({"ok": False, "error": "PIN falsch"}), 403
+        return jsonify({"ok": True})
 
     @app.post("/api/play")
     def play():
@@ -43,26 +75,29 @@ def create_app(controller: Controller) -> Flask:
         applied = controller.set_rate(requested)
         return jsonify({"ok": True, "rate": applied})
 
+    @app.post("/api/seek_random")
+    def seek_random():
+        """Jump all players to the same random position."""
+        position = controller.seek_random()
+        if position is None:
+            return jsonify({"error": "keine Videolänge bekannt"}), 409
+        return jsonify({"ok": True, "position": position})
+
     @app.post("/api/resync")
+    @require_pin
     def resync():
         controller.resync()
         return jsonify({"ok": True})
 
     @app.post("/api/restart_playback")
+    @require_pin
     def restart_playback():
         """Reset timeline to 0 on all connected players (does not restart VLC)."""
         controller.restart_playback()
-        return jsonify({
-            "ok": True,
-            "note": (
-                "Wiedergabe auf Position 0 gesetzt. "
-                "Für einen echten VLC-Neustart nach Video-Tausch: "
-                "Video hochladen (aktiviert VLC-Neustart) oder "
-                "POST /api/video/activate."
-            ),
-        })
+        return jsonify({"ok": True})
 
     @app.route("/api/video", methods=["POST", "PUT"])
+    @require_pin
     def upload_video():
         """Replace main.mp4 locally, push to peer agents, optionally restart VLC.
 
@@ -109,6 +144,7 @@ def create_app(controller: Controller) -> Flask:
         return jsonify({"ok": job.get("ok"), "job": job}), status_code
 
     @app.post("/api/video/activate")
+    @require_pin
     def activate_video():
         if controller.video_job_busy():
             return jsonify({"error": "video job already running"}), 409
@@ -120,6 +156,7 @@ def create_app(controller: Controller) -> Flask:
         return jsonify({"ok": job.get("ok"), "job": job}), status_code
 
     @app.get("/api/video/peers")
+    @require_pin
     def video_peers():
         """Probe agent fingerprints on all candidate IPs."""
         rows = video_distribute.probe_agent_videos(controller.cfg)
