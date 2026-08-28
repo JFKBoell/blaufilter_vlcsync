@@ -72,7 +72,8 @@ class BlaufilterConfig:
 def load(config_path: str = CONFIG_PATH) -> BlaufilterConfig:
     cfg = BlaufilterConfig()
 
-    parser = configparser.ConfigParser()
+    # interpolation off: values like an SSID containing '%' must not be parsed
+    parser = configparser.ConfigParser(interpolation=None)
     if os.path.exists(config_path) and parser.read(config_path) and parser.has_section("blaufilter"):
         section = parser["blaufilter"]
         cfg.device_id = section.getint("device_id", cfg.device_id)

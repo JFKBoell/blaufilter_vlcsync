@@ -57,7 +57,19 @@ Auf jedem Pi (frisches Raspberry Pi OS, per SSH oder Terminal):
 ```bash
 git clone https://github.com/JFKBoell/blaufilter_vlcsync.git
 cd blaufilter_vlcsync/deploy
+sudo ./setup.sh
+```
 
+`setup.sh` führt durch alle Einstellungen (Rolle, WLAN, Video, Bootscreen,
+PIN, Sendeleistung), zeigt eine Zusammenfassung und ruft dann `install.sh`
+auf. Jedes Gerät wird einzeln eingerichtet — **alle mit denselben
+WLAN-Einstellungen**.
+
+### Ohne Assistent
+
+`install.sh` lässt sich auch direkt aufrufen, etwa für Skripte:
+
+```bash
 # Host (baut das WLAN auf):
 sudo ./install.sh --id 1 --psk MeinWlanPasswort --video /pfad/zum/video.mp4
 
@@ -138,6 +150,7 @@ Das Script richtet ein:
 | VLC-Autostart (User-Unit `blaufilter-vlc`, Vollbild, Loop, RC auf :4212) | ✓ | ✓ |
 | Video-Agent (System-Unit `blaufilter-agent`, Port 4213) | ✓ | ✓ |
 | Port-Sperre 4212/4213 (System-Unit `blaufilter-firewall`) | ✓ | ✓ |
+| Wartungsmenü `blaufilter-setup` | ✓ | ✓ |
 | Controller + Web-UI (System-Unit `blaufilter-controller`, Waitress :80) | ✓ | — |
 | Namensauflösung `blaufilter.local` (mDNS + DHCP-DNS) | ✓ | — |
 | Desktop-Autologin, Bildschirm-Blanking aus | ✓ | ✓ |
@@ -247,6 +260,30 @@ Einstellbar in `/etc/blaufilter/config`: `drift_threshold`,
 Ruckelt es trotzdem periodisch: prüfen, ob das Video mit kurzem
 Keyframe-Abstand (GOP ≤ 2 s) kodiert ist — Seeks landen sonst weit daneben
 und provozieren Folgekorrekturen.
+
+## Wartung: `sudo blaufilter-setup`
+
+Auf jedem eingerichteten Gerät liegt ein Menü für den laufenden Betrieb —
+am Bildschirm wie über SSH:
+
+| Punkt | Zweck |
+|---|---|
+| **Status anzeigen** | Rolle, IP, Sendeleistung, Zustand aller Dienste; auf dem Host zusätzlich verbundene Geräte mit Drift und offene Hinweise |
+| **Dienste neu starten** | VLC, Video-Agent, Controller, Port-Sperre — einzeln oder alle |
+| **Rolle und Geräte-ID ändern** | Der Klon-Fall: SD-Karte kopiert, Gerät soll Client statt Host sein. Räumt die Einstellungen der alten Rolle auf |
+| **WLAN und Sendeleistung** | SSID, offen/WPA2, Sendeleistung ändern |
+| **Debug-PIN ändern** | PIN der Debug-Seite setzen oder Abfrage abschalten |
+| **Video austauschen** | Lokale Datei einsetzen (Verteilung auf alle Geräte macht das Web-UI) |
+| **Protokolle ansehen** | Journal von Controller, Agent, NetworkManager und VLC |
+
+Änderungen an Rolle oder WLAN lassen das Installationsscript erneut laufen —
+es gibt also nur einen Installationsweg, der gepflegt werden muss. Das
+funktioniert auch ohne Internet, solange keine neuen Pakete gebraucht werden.
+
+> **Nach dem Klonen einer SD-Karte** hat das kopierte Gerät noch ID und Rolle
+> des Originals. `sudo blaufilter-setup` → „Rolle und Geräte-ID ändern"
+> stellt das gerade; sonst spannen zwei Geräte ein WLAN namens `Blaufilter`
+> auf und die Clients finden den Host nicht mehr.
 
 ### Updates einspielen
 

@@ -73,11 +73,17 @@ echo "==> Blaufilter install: id=$BF_ID role=$BF_ROLE user=$BF_USER"
 
 echo "==> Writing /etc/blaufilter/config"
 install -d /etc/blaufilter
+# ssid/open_wifi/txpower/repo_dir are not read by the controller — they let the
+# setup tool re-run this installer with the settings already in use.
 cat > /etc/blaufilter/config <<EOF
 [blaufilter]
 device_id = $BF_ID
 role = $BF_ROLE
 debug_pin = $BF_PIN
+ssid = $BF_SSID
+open_wifi = $BF_OPEN
+txpower = $BF_TXPOWER
+repo_dir = $BF_REPO_DIR
 EOF
 
 BOOT_DIR=/boot/firmware

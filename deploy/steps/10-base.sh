@@ -3,13 +3,44 @@
 set -euo pipefail
 
 echo "==> [10-base] Installing packages"
-apt-get update
-apt-get install -y --no-install-recommends vlc python3-venv python3-pip nftables iw
+
+# Re-runs happen on devices that only live in the (uplink-less) AP network —
+# the setup tool re-invokes this installer for role and WiFi changes. apt then
+# cannot refresh or fetch, which is fine as long as everything is already
+# installed; only genuinely missing packages are a hard error.
+require_packages() {
+    if apt-get install -y --no-install-recommends "$@"; then
+        return 0
+    fi
+    echo "==> [10-base] apt failed (no internet?) — checking what is present"
+    local missing=()
+    command -v vlc >/dev/null || missing+=(vlc)
+    command -v nft >/dev/null || missing+=(nftables)
+    command -v iw  >/dev/null || missing+=(iw)
+    python3 -c "import venv" 2>/dev/null || missing+=(python3-venv)
+    if [[ "${BF_ROLE:-}" == "host" ]]; then
+        command -v avahi-publish >/dev/null || missing+=(avahi-utils)
+        [[ -x /usr/sbin/dnsmasq ]] || missing+=(dnsmasq-base)
+    fi
+    if (( ${#missing[@]} )); then
+        echo "Missing and not installable offline: ${missing[*]}" >&2
+        echo "Connect this device to the internet once, then run the installer again." >&2
+        return 1
+    fi
+    echo "    everything already installed — continuing"
+}
+
+apt-get update || echo "    (package lists could not be refreshed — using cached ones)"
+PACKAGES=(vlc python3-venv python3-pip nftables iw)
 if [[ "${BF_ROLE:-}" == "host" ]]; then
     # Host network packages MUST install here: step 20 switches wlan0 to AP
     # mode, after which there is no internet connectivity for apt anymore
-    apt-get install -y --no-install-recommends dnsmasq-base avahi-daemon avahi-utils
+    PACKAGES+=(dnsmasq-base avahi-daemon avahi-utils)
 fi
+require_packages "${PACKAGES[@]}"
+
+echo "==> [10-base] Installing the setup/maintenance tool"
+install -m 755 "$BF_REPO_DIR/deploy/blaufilter-setup.sh" /usr/local/sbin/blaufilter-setup
 
 echo "==> [10-base] Creating /opt/blaufilter"
 install -d /opt/blaufilter/video
