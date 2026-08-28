@@ -72,7 +72,23 @@ Optionen: `--ssid` (Standard `Blaufilter`), `--psk` (min. 8 Zeichen, Standard
 `blaufilter` — **ändern!**), `--role host|client` (Standard: ID 1 = host),
 `--user` (Standard: der aufrufende Benutzer), `--wifi-country` (Standard `DE`),
 `--splash bild.png` (eigener Bootscreen, siehe unten), `--pin` (PIN der
-Debug-Seite, Standard `1234`).
+Debug-Seite, Standard `1234`), `--open` (WLAN ohne Passwort, siehe unten).
+
+> **`--psk` weglassen ergibt kein offenes WLAN** — dann greift das
+> Standardpasswort `blaufilter`. Für ein offenes Netz `--open` verwenden,
+> und zwar **auf allen Geräten**: Host und Clients müssen zur selben
+> Verschlüsselung passen, sonst finden die Clients den AP nicht.
+
+### Offenes WLAN (`--open`)
+
+Besucher verbinden sich mit einem Tipp, ohne Passwort — zusammen mit dem
+Captive Portal (siehe unten) ist die Steuerung damit in zwei Schritten
+erreichbar. Preis: **Jeder in Funkreichweite kann Play/Pause, Tempo und
+Zufallssprung bedienen.** Die Debug-Seite bleibt durch die PIN geschützt,
+der Video-Agent auf Port 4213 nimmt jedoch Uploads ohne Nachweis an — bei
+einem offenen Netz sollte deshalb niemand Fremdes in Reichweite sein, oder
+das WLAN bleibt besser passwortgeschützt (Passwort z. B. auf einem Schild
+neben der Installation).
 Ohne `--video` das Video später manuell nach `/opt/blaufilter/video/main.mp4`
 kopieren.
 

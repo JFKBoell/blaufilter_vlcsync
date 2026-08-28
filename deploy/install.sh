@@ -6,6 +6,10 @@
 #   sudo ./install.sh --id 1 --video /path/to/main.mp4            # host
 #   sudo ./install.sh --id 2 --video /path/to/main.mp4            # client
 #   sudo ./install.sh --id 3 --role client --ssid Blaufilter --psk geheim123
+#   sudo ./install.sh --id 1 --open                                # open WiFi
+#
+# NOTE: leaving out --psk does NOT create an open network — it falls back to
+# the default password. Use --open for that, on every device.
 set -euo pipefail
 
 if [[ $EUID -ne 0 ]]; then
@@ -23,6 +27,7 @@ export BF_PSK="blaufilter"
 export BF_VIDEO=""
 export BF_SPLASH=""
 export BF_PIN="1234"
+export BF_OPEN=0
 export BF_USER="${SUDO_USER:-pi}"
 WIFI_COUNTRY="DE"
 
@@ -35,6 +40,7 @@ while [[ $# -gt 0 ]]; do
         --video)        BF_VIDEO="$2"; shift 2 ;;
         --splash)       BF_SPLASH="$2"; shift 2 ;;
         --pin)          BF_PIN="$2"; shift 2 ;;
+        --open)         BF_OPEN=1; shift ;;
         --user)         BF_USER="$2"; shift 2 ;;
         --wifi-country) WIFI_COUNTRY="$2"; shift 2 ;;
         *) echo "Unknown option: $1" >&2; exit 1 ;;
@@ -52,7 +58,7 @@ if [[ "$BF_ROLE" != "host" && "$BF_ROLE" != "client" ]]; then
     echo "--role must be 'host' or 'client'" >&2
     exit 1
 fi
-if [[ ${#BF_PSK} -lt 8 ]]; then
+if [[ "$BF_OPEN" != "1" && ${#BF_PSK} -lt 8 ]]; then
     echo "--psk must be at least 8 characters (WPA requirement)" >&2
     exit 1
 fi
@@ -110,7 +116,12 @@ fi
 echo
 echo "==> Done. Reboot to start playback: sudo reboot"
 if [[ "$BF_ROLE" == "host" ]]; then
-    echo "    Web UI after reboot: http://blaufilter.local (or http://192.168.4.1) — join WiFi '$BF_SSID'"
+    if [[ "$BF_OPEN" == "1" ]]; then
+        echo "    Join WiFi '$BF_SSID' (open, no password) — the control page opens by itself"
+    else
+        echo "    Join WiFi '$BF_SSID' (password: the --psk value) — the control page opens by itself"
+    fi
+    echo "    Otherwise: http://blaufilter.local or http://192.168.4.1"
 fi
 if [[ -z "$BF_VIDEO" ]]; then
     echo "    NOTE: no --video given. Copy your video to /opt/blaufilter/video/main.mp4"

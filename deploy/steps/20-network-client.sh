@@ -13,13 +13,20 @@ systemctl disable --now blaufilter-controller 2>/dev/null || true
 systemctl disable --now blaufilter-mdns-alias 2>/dev/null || true
 rm -f /etc/NetworkManager/dnsmasq-shared.d/blaufilter.conf
 
+if [[ "${BF_OPEN:-0}" == "1" ]]; then
+    # Open network: no wireless-security setting at all (key-mgmt=none = WEP).
+    # Must match the host — install every device with the same --open flag.
+    SEC_ARGS=()
+else
+    SEC_ARGS=(wifi-sec.key-mgmt wpa-psk wifi-sec.psk "$BF_PSK")
+fi
+
 echo "==> [20-network-client] Joining '$BF_SSID' as $CLIENT_IP"
 nmcli connection delete blaufilter 2>/dev/null || true
 nmcli connection add type wifi ifname wlan0 con-name blaufilter autoconnect yes \
     connection.autoconnect-retries 0 \
     ssid "$BF_SSID" \
-    wifi-sec.key-mgmt wpa-psk \
-    wifi-sec.psk "$BF_PSK" \
+    "${SEC_ARGS[@]}" \
     ipv4.method manual \
     ipv4.addresses "$CLIENT_IP/24" \
     ipv4.gateway 192.168.4.1 \
