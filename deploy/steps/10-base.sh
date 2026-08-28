@@ -4,7 +4,7 @@ set -euo pipefail
 
 echo "==> [10-base] Installing packages"
 apt-get update
-apt-get install -y --no-install-recommends vlc python3-venv python3-pip
+apt-get install -y --no-install-recommends vlc python3-venv python3-pip nftables iw
 if [[ "${BF_ROLE:-}" == "host" ]]; then
     # Host network packages MUST install here: step 20 switches wlan0 to AP
     # mode, after which there is no internet connectivity for apt anymore

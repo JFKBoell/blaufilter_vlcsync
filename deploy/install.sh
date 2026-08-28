@@ -28,6 +28,7 @@ export BF_VIDEO=""
 export BF_SPLASH=""
 export BF_PIN="1234"
 export BF_OPEN=0
+export BF_TXPOWER=""
 export BF_USER="${SUDO_USER:-pi}"
 WIFI_COUNTRY="DE"
 
@@ -41,6 +42,7 @@ while [[ $# -gt 0 ]]; do
         --splash)       BF_SPLASH="$2"; shift 2 ;;
         --pin)          BF_PIN="$2"; shift 2 ;;
         --open)         BF_OPEN=1; shift ;;
+        --txpower)      BF_TXPOWER="$2"; shift 2 ;;
         --user)         BF_USER="$2"; shift 2 ;;
         --wifi-country) WIFI_COUNTRY="$2"; shift 2 ;;
         *) echo "Unknown option: $1" >&2; exit 1 ;;
@@ -60,6 +62,10 @@ if [[ "$BF_ROLE" != "host" && "$BF_ROLE" != "client" ]]; then
 fi
 if [[ "$BF_OPEN" != "1" && ${#BF_PSK} -lt 8 ]]; then
     echo "--psk must be at least 8 characters (WPA requirement)" >&2
+    exit 1
+fi
+if [[ -n "$BF_TXPOWER" && ! "$BF_TXPOWER" =~ ^([1-9]|1[0-9]|20)$ ]]; then
+    echo "--txpower must be 1..20 (dBm); ~10 is a good value for one room" >&2
     exit 1
 fi
 
@@ -103,6 +109,10 @@ if [[ "$BF_ROLE" == "host" ]]; then
     bash "$SCRIPT_DIR/steps/20-network-host.sh"
 else
     bash "$SCRIPT_DIR/steps/20-network-client.sh"
+fi
+bash "$SCRIPT_DIR/steps/25-firewall.sh"
+if [[ -n "$BF_TXPOWER" ]]; then
+    bash "$SCRIPT_DIR/steps/26-txpower.sh"
 fi
 bash "$SCRIPT_DIR/steps/30-vlc-autostart.sh"
 bash "$SCRIPT_DIR/steps/35-agent.sh"

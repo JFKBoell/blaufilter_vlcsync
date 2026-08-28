@@ -1,0 +1,13 @@
+[Unit]
+Description=Blaufilter port guard (VLC RC + video agent reachable only from the host)
+Before=network-pre.target
+Wants=network-pre.target
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/sbin/nft -f /etc/blaufilter/firewall.nft
+ExecStop=/usr/sbin/nft delete table inet blaufilter
+
+[Install]
+WantedBy=multi-user.target

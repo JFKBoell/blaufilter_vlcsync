@@ -72,7 +72,8 @@ Optionen: `--ssid` (Standard `Blaufilter`), `--psk` (min. 8 Zeichen, Standard
 `blaufilter` — **ändern!**), `--role host|client` (Standard: ID 1 = host),
 `--user` (Standard: der aufrufende Benutzer), `--wifi-country` (Standard `DE`),
 `--splash bild.png` (eigener Bootscreen, siehe unten), `--pin` (PIN der
-Debug-Seite, Standard `1234`), `--open` (WLAN ohne Passwort, siehe unten).
+Debug-Seite, Standard `1234`), `--open` (WLAN ohne Passwort, siehe unten),
+`--txpower 10` (Sendeleistung in dBm drosseln, siehe unten).
 
 > **`--psk` weglassen ergibt kein offenes WLAN** — dann greift das
 > Standardpasswort `blaufilter`. Für ein offenes Netz `--open` verwenden,
@@ -85,10 +86,44 @@ Besucher verbinden sich mit einem Tipp, ohne Passwort — zusammen mit dem
 Captive Portal (siehe unten) ist die Steuerung damit in zwei Schritten
 erreichbar. Preis: **Jeder in Funkreichweite kann Play/Pause, Tempo und
 Zufallssprung bedienen.** Die Debug-Seite bleibt durch die PIN geschützt,
-der Video-Agent auf Port 4213 nimmt jedoch Uploads ohne Nachweis an — bei
-einem offenen Netz sollte deshalb niemand Fremdes in Reichweite sein, oder
-das WLAN bleibt besser passwortgeschützt (Passwort z. B. auf einem Schild
-neben der Installation).
+die Steuerports der Geräte sind durch die Port-Sperre abgesichert (siehe
+unten). Wer das nicht will, lässt das WLAN passwortgeschützt (Passwort z. B.
+auf einem Schild neben der Installation).
+
+### Port-Sperre (immer aktiv)
+
+Zwei Dienste auf jedem Gerät kennen prinzipbedingt keine eigene
+Zugangskontrolle: **VLCs RC-Interface (Port 4212)** — das Protokoll hat kein
+Passwort — und der **Video-Agent (Port 4213)**, der Uploads und VLC-Neustarts
+entgegennimmt. Ohne Schutz könnte jeder im WLAN die Wiedergabe stoppen oder
+das Video austauschen, an der PIN der Debug-Seite vorbei: die schützt nur den
+Controller auf Port 80, nicht diese beiden Dienste.
+
+Die Installation richtet deshalb eine nftables-Regel ein
+(`blaufilter-firewall.service`), die beide Ports **nur für den Host
+192.168.4.1 und localhost** freigibt und alles andere verwirft. Sie betrifft
+ausschließlich diese zwei Ports — SSH und alles Übrige bleiben unberührt.
+
+```bash
+sudo nft list table inet blaufilter        # aktive Regeln ansehen
+sudo systemctl status blaufilter-firewall
+```
+
+### Sendeleistung drosseln (`--txpower`)
+
+Hängen die Pis dicht beieinander im selben Raum, bringt volle Sendeleistung
+keine Reichweite, sondern vor allem gegenseitige Störung — die Empfänger
+werden von den starken Nachbarsignalen unempfindlicher. `--txpower 10`
+(dBm, gültig 1–20) begrenzt die Leistung; ~10 dBm ist für einen Raum ein
+guter Startwert.
+
+Die Einstellung wird über ein NetworkManager-Dispatcher-Skript nach jedem
+Verbindungsaufbau neu gesetzt, da der Treiber sie sonst zurücksetzt.
+Kontrolle: `iw dev wlan0 info | grep txpower`.
+
+**Am Host mit Bedacht wählen:** Dessen Sendeleistung bestimmt auch, aus
+welcher Entfernung Besucher den AP noch sehen. Die Clients dürfen ruhig
+niedriger liegen als der Host.
 Ohne `--video` das Video später manuell nach `/opt/blaufilter/video/main.mp4`
 kopieren.
 
@@ -102,6 +137,7 @@ Das Script richtet ein:
 | WLAN-Client mit statischer IP | — | ✓ |
 | VLC-Autostart (User-Unit `blaufilter-vlc`, Vollbild, Loop, RC auf :4212) | ✓ | ✓ |
 | Video-Agent (System-Unit `blaufilter-agent`, Port 4213) | ✓ | ✓ |
+| Port-Sperre 4212/4213 (System-Unit `blaufilter-firewall`) | ✓ | ✓ |
 | Controller + Web-UI (System-Unit `blaufilter-controller`, Waitress :80) | ✓ | — |
 | Namensauflösung `blaufilter.local` (mDNS + DHCP-DNS) | ✓ | — |
 | Desktop-Autologin, Bildschirm-Blanking aus | ✓ | ✓ |
