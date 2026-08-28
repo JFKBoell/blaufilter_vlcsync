@@ -108,6 +108,20 @@ DHCP-Server** des APs (Windows/Android). Das Web-UI lauscht auf Port 80,
 darum reicht `http://blaufilter.local` ohne Portangabe; `http://192.168.4.1`
 geht immer.
 
+### Captive Portal
+
+Nach dem Verbinden mit dem WLAN öffnet sich die Steuerseite **von selbst** —
+wie im Hotel-WLAN. Dahinter stecken zwei Bausteine: Der DHCP-DNS beantwortet
+*jeden* Namen mit `192.168.4.1`, und der Controller leitet jeden unbekannten
+Pfad auf die Steuerseite um. Die Verbindungsprüfung, die Handys nach dem
+Beitritt automatisch durchführen, landet damit beim Controller und das Gerät
+zeigt die Seite an.
+
+Öffnet sich nichts (manche Geräte unterdrücken die Abfrage), führt weiterhin
+jede beliebige Adresse im Browser zum Ziel — auch `blaufilter.local` oder
+`192.168.4.1`. In der Mini-Ansicht mancher Handys ist der Funktionsumfang
+eingeschränkt; „Im Browser öffnen“ zeigt die vollständige Seite.
+
 ## Bedienung
 
 Mit dem WLAN `Blaufilter` verbinden und **http://blaufilter.local** öffnen

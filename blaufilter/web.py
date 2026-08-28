@@ -4,7 +4,7 @@ import functools
 import hmac
 import os
 
-from flask import Flask, jsonify, request, send_from_directory
+from flask import Flask, jsonify, redirect, request, send_from_directory
 
 from blaufilter.controller import Controller
 from blaufilter import distribute as video_distribute
@@ -41,6 +41,22 @@ def create_app(controller: Controller) -> Flask:
     @app.get("/")
     def index():
         return send_from_directory(STATIC_DIR, "index.html")
+
+    @app.errorhandler(404)
+    def captive_portal(_error):
+        """Send every unknown path to the control page.
+
+        This is what makes the network a captive portal: phones probe a
+        vendor URL after joining (/generate_204 on Android,
+        /hotspot-detect.html on Apple, /connecttest.txt on Windows). None of
+        them are routes here, so they land in this handler, and a redirect
+        instead of the expected reply is exactly the signal that makes the
+        device pop up the page by itself. Paired with the wildcard DNS entry
+        in NetworkManager's dnsmasq config, which points every name at us.
+        """
+        if request.path.startswith("/api/"):
+            return jsonify({"error": "not found"}), 404
+        return redirect("/", code=302)
 
     @app.get("/api/status")
     def status():

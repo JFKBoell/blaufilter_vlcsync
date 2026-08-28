@@ -127,6 +127,22 @@ def test_empty_pin_disables_the_guard(tmp_path):
     assert http.get("/api/status").get_json()["debug_pin_required"] is False
 
 
+def test_captive_portal_redirects_connectivity_probes(client):
+    http, _, _ = client
+    for probe in ("/generate_204", "/hotspot-detect.html", "/connecttest.txt", "/beliebig"):
+        resp = http.get(probe)
+        assert resp.status_code == 302, probe
+        assert resp.headers["Location"].endswith("/"), probe
+
+
+def test_unknown_api_path_stays_json(client):
+    """The portal redirect must not swallow API 404s — the UI parses JSON."""
+    http, _, _ = client
+    resp = http.get("/api/gibtsnicht")
+    assert resp.status_code == 404
+    assert resp.get_json()["error"]
+
+
 def test_index_served(client):
     http, _, _ = client
     resp = http.get("/")

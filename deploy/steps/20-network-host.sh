@@ -11,6 +11,10 @@ echo "==> [20-network-host] Name resolution config: blaufilter.local -> 192.168.
 install -d /etc/NetworkManager/dnsmasq-shared.d
 cat > /etc/NetworkManager/dnsmasq-shared.d/blaufilter.conf <<'EOF'
 address=/blaufilter.local/192.168.4.1
+# Captive portal: every name resolves to the host, so a joining phone's
+# connectivity check reaches the controller and the page opens by itself.
+# (This network has no uplink anyway — nothing else could be resolved.)
+address=/#/192.168.4.1
 EOF
 
 echo "==> [20-network-host] Configuring WiFi AP '$BF_SSID' on 192.168.4.1/24"
