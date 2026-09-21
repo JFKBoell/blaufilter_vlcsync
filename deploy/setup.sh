@@ -2,7 +2,9 @@
 # Guided installation. Collects the settings in a dialog and then hands them to
 # install.sh — the installer stays the single source of truth, this is only the
 # front end. Everything here can still be done with install.sh directly.
-set -euo pipefail
+# No pipefail: a helper in a command substitution that finds nothing (du, grep)
+# would otherwise abort the whole wizard.
+set -eu
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 TITLE="Blaufilter — Einrichtung"

@@ -270,7 +270,9 @@ und provozieren Folgekorrekturen.
 ## Wartung: `sudo blaufilter-setup`
 
 Auf jedem eingerichteten Gerät liegt ein Menü für den laufenden Betrieb —
-am Bildschirm wie über SSH:
+am Bildschirm wie über SSH. Auf dem Desktop liegt dafür die Verknüpfung
+**„Blaufilter Einstellungen"** (auch im Startmenü unter *Einstellungen*);
+ein Doppelklick öffnet das Menü, ohne Terminal und ohne SSH.
 
 | Punkt | Zweck |
 |---|---|
@@ -303,10 +305,16 @@ zu Ende geführt; nach dem erneuten Verbinden steht das Ergebnis in
 
 ### Bildschirmauflösung
 
-Das Menü liest die möglichen Auflösungen direkt beim Grafiktreiber aus
-(`/sys/class/drm`) — es braucht also keine laufende Desktop-Sitzung und
-funktioniert auch per SSH. Die erste angebotene Auflösung ist die, die der
-Bildschirm selbst bevorzugt.
+Das Menü bietet die beiden Einstellungen an, die im Alltag gebraucht werden:
+
+- **1920×1080 @ 60 Hz** — zum Einrichten und Entwickeln
+- **3840×2160 @ 30 Hz** — für die Installation
+- **automatisch** — der Bildschirm entscheidet
+- **weitere…** — alle Auflösungen, die der Bildschirm meldet
+
+Die Liste unter „weitere" kommt direkt vom Grafiktreiber (`/sys/class/drm`),
+funktioniert also ohne Desktop-Sitzung auch per SSH; ganz oben steht die vom
+Bildschirm bevorzugte Auflösung.
 
 Festgelegt wird die Auswahl über den Kernel-Parameter
 `video=HDMI-A-1:3840x2160@30` in der `cmdline.txt`. Das wirkt auf **Konsole,

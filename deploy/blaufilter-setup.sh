@@ -5,7 +5,10 @@
 # at NetworkManager here: the installer already knows how to clean up leftovers
 # (a cloned SD card carrying the host's AP profile, for instance), and one
 # code path means the two can never drift apart.
-set -euo pipefail
+# Deliberately no 'set -e' / 'pipefail': in an interactive menu a command that
+# legitimately finds nothing (a grep for a setting that is not there yet) must
+# not tear the whole tool down mid-session. Every action checks its own result.
+set -u
 
 CONFIG=/etc/blaufilter/config
 VIDEO=/opt/blaufilter/video/main.mp4
@@ -474,7 +477,7 @@ mode_label() {
 }
 
 current_video_setting() {  # connector -> "1920x1080@60" or empty
-    grep -oE "video=$1:[^[:space:]]+" "$CMDLINE" 2>/dev/null | head -1 | cut -d: -f2-
+    grep -oE "video=$1:[^[:space:]]+" "$CMDLINE" 2>/dev/null | head -1 | cut -d: -f2- || true
 }
 
 set_video_setting() {  # connector value ("" = remove, back to automatic)
@@ -506,13 +509,35 @@ offer_4kp60() {  # mode rate
     printf '\nhdmi_enable_4kp60=1\n' >> "$config_txt"
 }
 
+# Lists the modes the display itself reports — the escape hatch behind "weitere".
+pick_edid_mode() {  # drm-dir -> prints "WxH" or nothing
+    local dir=$1 entries=() first=1 m
+    while read -r m; do
+        [[ -n $m ]] || continue
+        if (( first )); then
+            entries+=("$m" "$(mode_label "$m") — vom Bildschirm bevorzugt"); first=0
+        else
+            entries+=("$m" "$(mode_label "$m")")
+        fi
+    done < <(awk '!seen[$0]++' "$dir/modes" 2>/dev/null)
+    (( ${#entries[@]} )) || return 1
+    whiptail --title "$TITLE — Auflösung" --menu \
+        "Vom Bildschirm gemeldete Auflösungen:" 20 74 9 "${entries[@]}" 3>&1 1>&2 2>&3
+}
+
 menu_resolution() {
-    local outs=() out dir entries=() first=1 m mode value current splash_size hint=""
+    local outs=() out dir m mode value current splash_size hint=""
     local rate=""
 
-    [[ -f $CMDLINE ]] || { msg "Boot-Konfiguration nicht gefunden:\n$CMDLINE"; return 0; }
+    if [[ ! -f $CMDLINE ]]; then
+        msg "Boot-Konfiguration nicht gefunden:\n$CMDLINE"
+        return 0
+    fi
 
-    while read -r m; do [[ -n $m ]] && outs+=("$m" "angeschlossen"); done < <(connected_outputs)
+    while read -r m; do
+        [[ -n $m ]] && outs+=("$m" "angeschlossen")
+    done < <(connected_outputs)
+
     if (( ${#outs[@]} == 0 )); then
         msg "Kein angeschlossener Bildschirm erkannt.\n\nSteckt das HDMI-Kabel? Die Liste kommt direkt vom\nGrafiktreiber des Systems."
         return 0
@@ -523,52 +548,49 @@ menu_resolution() {
     else
         out=${outs[0]}
     fi
-
     dir=$(drm_dir_for "$out") || { msg "Anschluss $out nicht gefunden."; return 0; }
     current=$(current_video_setting "$out")
 
-    while read -r m; do
-        [[ -n $m ]] || continue
-        if (( first )); then
-            entries+=("$m" "$(mode_label "$m") — vom Bildschirm bevorzugt"); first=0
-        else
-            entries+=("$m" "$(mode_label "$m")")
-        fi
-    done < <(awk '!seen[$0]++' "$dir/modes" 2>/dev/null)
+    # The two settings this installation actually uses, plus escape hatches
+    value=$(whiptail --title "$TITLE — Auflösung" --menu \
+        "Auflösung für $out\n\nAktuell fest eingestellt: ${current:-automatisch}" 17 74 4 \
+        "1920x1080@60" "Full HD — Einrichten und Entwickeln" \
+        "3840x2160@30" "4K UHD — Installation" \
+        ""             "automatisch — was der Bildschirm meldet" \
+        "MEHR"         "weitere Auflösungen des Bildschirms…" 3>&1 1>&2 2>&3) || return 0
 
-    if (( ${#entries[@]} == 0 )); then
-        msg "Der Bildschirm meldet keine Auflösungen.\n\nDas passiert, wenn kein Bildschirm angeschlossen ist\noder er kein EDID liefert."
-        return 0
-    fi
-    entries+=("AUTO" "automatisch — Bildschirm entscheidet")
-
-    mode=$(whiptail --title "$TITLE — Auflösung" --menu \
-        "Auflösung für $out\n\nAktuell fest eingestellt: ${current:-automatisch}" 20 74 9 \
-        "${entries[@]}" 3>&1 1>&2 2>&3) || return 0
-
-    if [[ $mode == AUTO ]]; then
-        value=""
-    else
+    if [[ $value == MEHR ]]; then
+        mode=$(pick_edid_mode "$dir") || {
+            msg "Der Bildschirm meldet keine Auflösungen.\n\nDas passiert, wenn kein Bildschirm angeschlossen ist\noder er kein EDID liefert."
+            return 0
+        }
+        [[ -n $mode ]] || return 0
         rate=$(whiptail --title "$TITLE — Bildwiederholrate" --menu \
             "Bildwiederholrate für $mode:" 16 74 4 \
-            ""   "automatisch (empfohlen)" \
+            ""   "automatisch" \
             "60" "60 Hz" \
             "50" "50 Hz" \
-            "30" "30 Hz — für 4K auf dem Pi 4 die sichere Wahl" 3>&1 1>&2 2>&3) || return 0
+            "30" "30 Hz" 3>&1 1>&2 2>&3) || return 0
         value="$mode${rate:+@$rate}"
+    else
+        mode=${value%@*}
+        rate=${value#*@}
+        [[ $rate == "$value" ]] && rate=""
     fi
 
-    hint=""
     if [[ -n $value && -f $SPLASH_TARGET ]]; then
         splash_size=$(png_size "$SPLASH_TARGET")
-        [[ -n $splash_size && $splash_size != "$mode" ]] && \
+        if [[ -n $splash_size && $splash_size != "$mode" ]]; then
             hint="\n\nHinweis: das Startbild hat $splash_size und wird skaliert."
+        fi
     fi
 
     yes_no "Auflösung fest einstellen?\n\nAnschluss: $out\nAuflösung: ${value:-automatisch}\n\nWirkt nach einem Neustart — auf Konsole, Startbild und\nWiedergabe. Die bisherige Boot-Zeile wird als\ncmdline.txt.bak gesichert.$hint" 18 || return 0
 
     set_video_setting "$out" "$value" || return 0
-    [[ -n $value ]] && offer_4kp60 "$mode" "$rate"
+    if [[ -n $value ]]; then
+        offer_4kp60 "$mode" "$rate"
+    fi
     if yes_no "Gespeichert.\n\nJetzt neu starten, damit die Auflösung wirkt?" 10; then
         systemctl reboot
     fi

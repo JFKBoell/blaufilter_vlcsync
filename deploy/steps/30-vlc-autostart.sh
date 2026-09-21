@@ -28,3 +28,16 @@ AUTOSTART_DIR="$USER_HOME/.config/autostart"
 install -d "$AUTOSTART_DIR"
 install -m 644 "$BF_REPO_DIR/deploy/autostart/blaufilter-vlc.desktop" "$AUTOSTART_DIR/"
 chown -R "$BF_USER:$BF_USER" "$AUTOSTART_DIR"
+
+echo "==> [30-vlc-autostart] Installing the settings shortcut (desktop + menu)"
+# Opens the maintenance tool with a double click — no SSH, no terminal typing.
+# The default Raspberry Pi OS user has passwordless sudo, so it starts straight
+# into the menu.
+install -m 644 "$BF_REPO_DIR/deploy/autostart/blaufilter-setup.desktop" \
+    /usr/share/applications/blaufilter-setup.desktop
+DESKTOP_DIR="$USER_HOME/Desktop"
+if [[ -d $DESKTOP_DIR ]]; then
+    install -m 755 -o "$BF_USER" -g "$BF_USER" \
+        "$BF_REPO_DIR/deploy/autostart/blaufilter-setup.desktop" \
+        "$DESKTOP_DIR/blaufilter-setup.desktop"
+fi
