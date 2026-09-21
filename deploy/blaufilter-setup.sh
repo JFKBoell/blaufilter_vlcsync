@@ -121,6 +121,40 @@ PY
 
 # ------------------------------------------------------------------ actions
 
+# Runs a command detached from this terminal and streams its log.
+#
+# Reconfiguring the AP drops the very SSH connection this menu may be running
+# over. Without setsid the step would die of SIGHUP — possibly between deleting
+# and recreating the WiFi profile, which would leave the device unreachable.
+# Detached it always runs to completion; reconnect and the log shows the result.
+run_detached() {  # headline command...
+    local headline=$1; shift
+    local log=/var/log/blaufilter-setup.log
+    : > "$log"
+    rm -f "$log.done"
+
+    clear
+    echo "== $headline =="
+    echo "   Läuft unabhängig von dieser Sitzung weiter (Protokoll: $log)"
+    echo
+    setsid --fork bash -c "$(printf '%q ' "$@") >>'$log' 2>&1; echo \$? >'$log.done'"
+
+    tail -n +1 -f "$log" 2>/dev/null &
+    local tailpid=$!
+    while [[ ! -f $log.done ]]; do sleep 1; done
+    sleep 1
+    kill "$tailpid" 2>/dev/null || true
+
+    local rc; rc=$(cat "$log.done" 2>/dev/null || echo 1)
+    echo
+    if [[ $rc == 0 ]]; then
+        read -rp "Fertig. Enter drücken…" _
+    else
+        read -rp "FEHLGESCHLAGEN (Code $rc) — Ausgabe oben prüfen. Enter drücken…" _
+    fi
+    return "$rc"
+}
+
 # Prints the repository path on stdout, asking for it if the config has none.
 repo_path() {
     local repo; repo=$(cfg_get repo_dir "")
@@ -146,15 +180,8 @@ reinstall() {  # extra install.sh arguments
     [[ -n $txp ]] && args+=(--txpower "$txp")
     args+=("$@")
 
-    clear
-    echo "== Installer läuft: ${args[*]//$psk/******} =="
-    echo
-    if bash "$repo/deploy/install.sh" "${args[@]}"; then
-        echo; read -rp "Fertig. Enter drücken…" _
-        return 0
-    fi
-    echo; read -rp "FEHLGESCHLAGEN — Ausgabe oben prüfen. Enter drücken…" _
-    return 1
+    run_detached "Installationsscript läuft — das dauert einige Minuten" \
+        bash "$repo/deploy/install.sh" "${args[@]}"
 }
 
 menu_role() {
@@ -178,18 +205,44 @@ menu_role() {
     reinstall --id "$id" --role "$role" || true
 }
 
+apply_txpower() {  # repo value ("" = back to the driver maximum)
+    local repo=$1 txp=$2
+    if [[ -n $txp ]]; then
+        BF_TXPOWER="$txp" bash "$repo/deploy/steps/26-txpower.sh" >/dev/null 2>&1 \
+            || msg "Die Sendeleistung konnte nicht gesetzt werden."
+    else
+        rm -f /etc/NetworkManager/dispatcher.d/50-blaufilter-txpower
+        iw dev wlan0 set txpower auto >/dev/null 2>&1 || true
+    fi
+}
+
+# Only the network step runs here — not the whole installer. Changing an SSID
+# has no business reinstalling packages, systemd units and the Python package.
+# (A role change does go through the installer: that one really does rearrange
+# the whole device.)
 menu_wifi() {
-    local ssid open psk txp
+    local repo role id ssid open psk txp step
+    repo=$(repo_path) || return 0
+    role=$(cfg_get role host)
+    id=$(cfg_get device_id 1)
+
     ssid=$(whiptail --title "$TITLE — WLAN" --inputbox "Netzwerkname (SSID):" 10 74 \
            "$(cfg_get ssid Blaufilter)" 3>&1 1>&2 2>&3) || return 0
 
     if yes_no "WLAN ohne Passwort betreiben?\n\nJa  = offen, Besucher verbinden sich mit einem Tipp.\nNein = WPA2 mit Passwort.\n\nDie Steuerports der Geräte sind in beiden Fällen\ndurch die Port-Sperre geschützt." 14; then
         open=1
+        psk=""
     else
         open=0
-        psk=$(whiptail --title "$TITLE — WLAN" --passwordbox \
-              "WLAN-Passwort (mindestens 8 Zeichen):" 10 74 3>&1 1>&2 2>&3) || return 0
-        if [[ ${#psk} -lt 8 ]]; then msg "Das Passwort muss mindestens 8 Zeichen haben."; return 0; fi
+        psk=$(current_psk)
+        if [[ -z $psk ]] || yes_no "Passwort ändern?\n\nNein = bisheriges Passwort beibehalten." 10; then
+            while true; do
+                psk=$(whiptail --title "$TITLE — WLAN" --passwordbox \
+                      "WLAN-Passwort (mindestens 8 Zeichen):" 10 74 3>&1 1>&2 2>&3) || return 0
+                [[ ${#psk} -ge 8 ]] && break
+                msg "Das Passwort muss mindestens 8 Zeichen haben."
+            done
+        fi
     fi
 
     txp=$(whiptail --title "$TITLE — Sendeleistung" --menu \
@@ -199,14 +252,16 @@ menu_wifi() {
         "10" "10 dBm — ein Raum (empfohlen)" \
         "6"  "6 dBm — sehr dicht beieinander" 3>&1 1>&2 2>&3) || return 0
 
-    yes_no "WLAN neu einrichten?\n\nSSID: $ssid\nVerschlüsselung: $([[ $open == 1 ]] && echo 'offen' || echo 'WPA2')\nSendeleistung: ${txp:-unverändert}\n\nACHTUNG: Alle anderen Geräte müssen mit denselben\nEinstellungen neu eingerichtet werden, sonst finden\nsie den Host nicht mehr." 16 || return 0
+    yes_no "WLAN jetzt neu einrichten?\n\nSSID: $ssid\nVerschlüsselung: $([[ $open == 1 ]] && echo 'offen' || echo 'WPA2')\nSendeleistung: ${txp:-unverändert}\n\nDie WLAN-Verbindung bricht dabei kurz ab. Alle anderen\nGeräte müssen dieselben Einstellungen bekommen, sonst\nfinden sie den Host nicht mehr." 17 || return 0
 
     cfg_set ssid "$ssid"
     cfg_set open_wifi "$open"
     cfg_set txpower "$txp"
-    local args=(--id "$(cfg_get device_id 1)" --role "$(cfg_get role host)")
-    [[ $open == 1 ]] || args+=(--psk "$psk")
-    reinstall "${args[@]}" || true
+
+    [[ $role == host ]] && step=20-network-host.sh || step=20-network-client.sh
+    export BF_REPO_DIR="$repo" BF_ID="$id" BF_SSID="$ssid" BF_PSK="$psk" BF_OPEN="$open"
+    run_detached "WLAN wird neu eingerichtet" bash "$repo/deploy/steps/$step" || return 0
+    apply_txpower "$repo" "$txp"
 }
 
 menu_pin() {

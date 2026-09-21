@@ -277,15 +277,23 @@ am Bildschirm wie über SSH:
 | **Status anzeigen** | Rolle, IP, Sendeleistung, Zustand aller Dienste; auf dem Host zusätzlich verbundene Geräte mit Drift und offene Hinweise |
 | **Dienste starten / stoppen / neu starten** | VLC, Video-Agent, Controller, Port-Sperre — einzeln oder alle. Vor dem Stoppen wird gezeigt, was dadurch ausfällt; nach einem Geräteneustart laufen sie wieder von selbst |
 | **Rolle und Geräte-ID ändern** | Der Klon-Fall: SD-Karte kopiert, Gerät soll Client statt Host sein. Räumt die Einstellungen der alten Rolle auf |
-| **WLAN und Sendeleistung** | SSID, offen/WPA2, Sendeleistung ändern |
+| **WLAN und Sendeleistung** | SSID, offen/WPA2, Sendeleistung ändern — dauert Sekunden, da nur die Netzwerkeinstellungen neu geschrieben werden. Das Passwort lässt sich beibehalten, ohne es erneut einzutippen |
 | **Debug-PIN ändern** | PIN der Debug-Seite setzen oder Abfrage abschalten |
 | **Video austauschen** | Lokale Datei einsetzen (Verteilung auf alle Geräte macht das Web-UI) |
 | **Startbild ändern** | Mitgelieferte Bilder (`Blaufilter_<ID>.png`), eigene PNGs oder das ursprüngliche Startbild zurückholen; zeigt vorher die Auflösung an |
 | **Protokolle ansehen** | Journal von Controller, Agent, NetworkManager und VLC |
 
-Änderungen an Rolle oder WLAN lassen das Installationsscript erneut laufen —
-es gibt also nur einen Installationsweg, der gepflegt werden muss. Das
-funktioniert auch ohne Internet, solange keine neuen Pakete gebraucht werden.
+**WLAN-Änderungen** betreffen nur die Netzwerkkonfiguration und sind in
+Sekunden erledigt; die Wiedergabe läuft weiter. Ein **Rollenwechsel** lässt
+dagegen das Installationsscript erneut durchlaufen (1–2 Minuten), weil dabei
+Dienste hinzukommen oder wegfallen und die Einstellungen der alten Rolle
+aufgeräumt werden müssen — auch ohne Internet, solange keine neuen Pakete
+gebraucht werden.
+
+Beides läuft **abgekoppelt von der Sitzung**: Das Neukonfigurieren des WLAN
+kappt die Verbindung, über die man gerade arbeitet. Der Schritt wird trotzdem
+zu Ende geführt; nach dem erneuten Verbinden steht das Ergebnis in
+`/var/log/blaufilter-setup.log`.
 
 > **Nach dem Klonen einer SD-Karte** hat das kopierte Gerät noch ID und Rolle
 > des Originals. `sudo blaufilter-setup` → „Rolle und Geräte-ID ändern"
