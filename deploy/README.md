@@ -151,6 +151,7 @@ Das Script richtet ein:
 | Video-Agent (System-Unit `blaufilter-agent`, Port 4213) | ✓ | ✓ |
 | Port-Sperre 4212/4213 (System-Unit `blaufilter-firewall`) | ✓ | ✓ |
 | Wartungsmenü `blaufilter-setup` | ✓ | ✓ |
+| SSH-Zugang aktiviert | ✓ | ✓ |
 | Controller + Web-UI (System-Unit `blaufilter-controller`, Waitress :80) | ✓ | — |
 | Namensauflösung `blaufilter.local` (mDNS + DHCP-DNS) | ✓ | — |
 | Desktop-Autologin, Bildschirm-Blanking aus | ✓ | ✓ |
@@ -177,6 +178,23 @@ anfordert — nur dann wird es überhaupt neu gebaut. Schlägt das fehl
 **das Startbild ist aber trotzdem gesetzt**. Ursache ist dann meist
 `MODULES=dep` in `/etc/initramfs-tools/initramfs.conf`; auf `MODULES=most`
 umstellen und einmal `sudo update-initramfs -u` ausführen behebt es.
+
+### SSH-Zugang
+
+Die Installation aktiviert SSH auf jedem Gerät (inklusive der Host-Schlüssel,
+die ein frisches Image noch nicht mitbringt). Die Adressen folgen den
+Geräte-IDs:
+
+```bash
+ssh blau@blaufilter.local     # Host, alternativ blau@192.168.4.1
+ssh blau@192.168.4.12         # Gerät 2
+ssh blau@192.168.4.13         # Gerät 3
+```
+
+> **Bei offenem WLAN (`--open`)** kann jeder in Funkreichweite den SSH-Port
+> erreichen. Dann ein starkes Passwort für den Benutzer setzen (`passwd`),
+> besser noch auf Anmeldung per Schlüssel umstellen. Wird SSH nicht gebraucht:
+> `sudo raspi-config nonint do_ssh 1` schaltet es wieder ab.
 
 ### Namensauflösung `blaufilter.local`
 

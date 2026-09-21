@@ -139,6 +139,12 @@ if [[ "$BF_ROLE" == "host" ]]; then
     fi
     echo "    Otherwise: http://blaufilter.local or http://192.168.4.1"
 fi
+if [[ "$BF_ID" == "1" ]]; then
+    echo "    SSH: ssh $BF_USER@192.168.4.1  (or $BF_USER@blaufilter.local)"
+else
+    echo "    SSH: ssh $BF_USER@192.168.4.1$BF_ID"
+fi
+echo "    Settings menu on the device: sudo blaufilter-setup"
 if [[ -z "$BF_VIDEO" ]]; then
     echo "    NOTE: no --video given. Copy your video to /opt/blaufilter/video/main.mp4"
 fi

@@ -39,6 +39,19 @@ if [[ "${BF_ROLE:-}" == "host" ]]; then
 fi
 require_packages "${PACKAGES[@]}"
 
+echo "==> [10-base] Enabling SSH"
+# Devices end up mounted somewhere without a keyboard, so remote access is not
+# optional in practice. raspi-config is preferred because it also generates the
+# host keys (a fresh image ships without them and sshd then refuses to start).
+if command -v raspi-config >/dev/null 2>&1 && raspi-config nonint do_ssh 0; then
+    :
+else
+    ssh-keygen -A >/dev/null 2>&1 || true
+    systemctl enable --now ssh 2>/dev/null \
+        || systemctl enable --now sshd 2>/dev/null \
+        || echo "    (SSH konnte nicht aktiviert werden — ist openssh-server installiert?)" >&2
+fi
+
 echo "==> [10-base] Installing the setup/maintenance tool"
 # Symlink, not a copy: a copy silently keeps running an old menu after a
 # git pull, and a re-install from an older checkout even downgrades it.
