@@ -296,6 +296,7 @@ enthält.
 | **Rolle und Geräte-ID ändern** | Der Klon-Fall: SD-Karte kopiert, Gerät soll Client statt Host sein. Räumt die Einstellungen der alten Rolle auf |
 | **WLAN** | Eigenes WLAN ändern (SSID, offen/WPA2, Sendeleistung) — dauert Sekunden, da nur die Netzwerkeinstellungen neu geschrieben werden, Passwort auf Wunsch beibehalten. Außerdem: in ein anderes Netz wechseln und wieder zurück (siehe unten) |
 | **Bildschirmauflösung** | Auflösung und Bildwiederholrate fest einstellen oder wieder dem Bildschirm überlassen (siehe unten) |
+| **Schreibschutz** | Overlay-Dateisystem ein-/ausschalten, damit Stromausfall die SD-Karte nicht beschädigt (siehe unten) |
 | **Debug-PIN ändern** | PIN der Debug-Seite setzen oder Abfrage abschalten |
 | **Video austauschen** | Lokale Datei einsetzen (Verteilung auf alle Geräte macht das Web-UI) |
 | **Startbild ändern** | Mitgelieferte Bilder (`Blaufilter_<ID>.png`), eigene PNGs oder das ursprüngliche Startbild zurückholen; zeigt vorher die Auflösung an |
@@ -351,6 +352,44 @@ Blaufilter-WLAN**.
 
 Im AP-Betrieb kann das Funkmodul meist nicht nach Netzen suchen; der
 Netzwerkname wird dann eingetippt statt aus einer Liste gewählt.
+
+### Schreibschutz gegen Stromausfall
+
+Eine Installation wird am Netzschalter ausgeschaltet — und genau das ist die
+häufigste Ursache für beschädigte SD-Karten: Beim plötzlichen Stromverlust
+gehen Schreibvorgänge verloren, die noch im Puffer standen. Besonders
+anfällig sind Werkzeuge, die viele kleine Dateien schreiben (git etwa, oder
+die Systemprotokolle).
+
+**Die wirksamste Maßnahme** ist der Menüpunkt *Schreibschutz*: Er schaltet
+das Overlay-Dateisystem ein. Das Wurzeldateisystem wird dann nur noch gelesen,
+alle Schreibvorgänge landen im Arbeitsspeicher und sind nach einem Neustart
+wieder weg. Stromausfall kann das System damit nicht mehr beschädigen.
+
+```
+Betrieb:  Schreibschutz ein   → Stecker ziehen ist unkritisch
+Wartung:  Schreibschutz aus   → Änderungen bleiben erhalten
+```
+
+Beim Einschalten prüft das Menü, ob das initramfs baubar ist, und bietet an,
+die bekannte Bremse `MODULES=dep` auf `MODULES=most` zu korrigieren — dieselbe
+Ursache, die beim Startbild die Warnung auslöst. Ist der Schreibschutz aktiv,
+steht das in der Kopfzeile des Menüs und im Status, damit man nicht versehentlich
+Einstellungen vornimmt, die der nächste Neustart verwirft.
+
+**Ergänzend sinnvoll:**
+
+- **Sauber herunterfahren per Taster:** `dtoverlay=gpio-shutdown` in der
+  `config.txt` macht aus einem Taster zwischen GPIO3 und Masse einen
+  Ausschalter. Kurz drücken, warten bis die grüne LED aufhört zu blinken,
+  dann Strom trennen.
+- **Golden Image:** Ein fertig eingerichtetes Gerät einmal als Image sichern
+  (`dd` oder Raspberry Pi Imager). Im Schadensfall ist die Karte in Minuten
+  neu bespielt, statt alles erneut einzurichten.
+- **Git-Reparatur:** Ist ein Repository beschädigt, hilft schlicht neu klonen —
+  es enthält nichts, was nur dort existiert. Vorher `git fsck` zeigt den
+  Schaden, `git config core.fsync loose-object,index,refs` macht künftige
+  Schreibvorgänge haltbarer (kostet etwas Tempo).
 
 ### Bildschirmauflösung
 

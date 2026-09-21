@@ -78,6 +78,67 @@ current_psk() {
     echo "$psk"
 }
 
+# ------------------------------------------------------- write protection
+#
+# Pulling the plug is how an installation gets switched off, and an SD card
+# loses whatever was still buffered. The overlay filesystem is the cure: the
+# root filesystem is mounted read-only and all writes go to RAM, so a power cut
+# can no longer corrupt anything. Everything written while it is active is gone
+# after a reboot, so it is turned off for maintenance and back on for the show.
+
+MOUNTS=${MOUNTS:-/proc/mounts}   # overridable so this can be tested
+
+overlay_active() {
+    grep -qE '^overlay[[:space:]]+/[[:space:]]+overlay' "$MOUNTS"
+}
+
+# The overlay needs a working initramfs, and Raspberry Pi OS ships a setting
+# that breaks building one (the same one that makes the splash step warn).
+initramfs_broken() {
+    grep -qE '^[[:space:]]*MODULES=dep' /etc/initramfs-tools/initramfs.conf 2>/dev/null
+}
+
+fix_initramfs_modules() {
+    local conf=/etc/initramfs-tools/initramfs.conf
+    cp "$conf" "$conf.bak" 2>/dev/null || true
+    sed -i 's/^[[:space:]]*MODULES=dep/MODULES=most/' "$conf"
+}
+
+menu_overlay() {
+    local state action
+    if overlay_active; then
+        state="aktiv — Änderungen gehen beim Neustart verloren"
+    else
+        state="aus — Änderungen werden auf die SD-Karte geschrieben"
+    fi
+
+    action=$(whiptail --title "$TITLE — Schreibschutz" --menu \
+        "Zustand: $state\n\nMit Schreibschutz landen alle Schreibvorgänge im\nArbeitsspeicher statt auf der SD-Karte. Stromausfall\nkann das System dann nicht mehr beschädigen — aber\nauch nichts bleibt erhalten.\n\nFür die Installation einschalten, zum Warten ausschalten." 21 74 2 \
+        "ein" "Schreibschutz einschalten (für den Betrieb)" \
+        "aus" "Schreibschutz ausschalten (zum Warten)" 3>&1 1>&2 2>&3) || return 0
+
+    if ! command -v raspi-config >/dev/null; then
+        msg "raspi-config ist nicht vorhanden.\n\nDer Schreibschutz lässt sich damit nicht umschalten."
+        return 0
+    fi
+
+    if [[ $action == ein ]]; then
+        if initramfs_broken; then
+            yes_no "Der Schreibschutz braucht ein funktionierendes initramfs.\nAuf diesem System steht MODULES=dep, womit der Bau\nfehlschlägt (dieselbe Ursache wie die Warnung beim\nStartbild).\n\nJetzt auf MODULES=most umstellen?" 16 || return 0
+            fix_initramfs_modules
+        fi
+        yes_no "Schreibschutz einschalten?\n\nAb dem nächsten Neustart gilt: Videos, Einstellungen und\nProtokolle überleben keinen Neustart mehr. Zum Ändern\nvon Dingen vorher hier wieder ausschalten." 15 || return 0
+        run_detached "Schreibschutz wird eingeschaltet" raspi-config nonint do_overlayfs 0
+    else
+        yes_no "Schreibschutz ausschalten?\n\nAb dem nächsten Neustart werden Änderungen wieder\ndauerhaft auf die SD-Karte geschrieben." 13 || return 0
+        run_detached "Schreibschutz wird ausgeschaltet" raspi-config nonint do_overlayfs 1
+    fi
+
+    if yes_no "Die Umstellung wirkt erst nach einem Neustart.\n\nJetzt neu starten?" 10; then
+        systemctl reboot
+    fi
+}
+
 # ------------------------------------------------------------------- status
 
 svc_state() {  # unit -> "aktiv" / "GESTOPPT" / "nicht installiert"
@@ -97,6 +158,7 @@ status_report() {
 
     report="Gerät ${id}  ·  Rolle: ${role}\n"
     report+="Softwarestand: $(repo_version)\n"
+    report+="Schreibschutz: $(overlay_active && echo 'AKTIV — Änderungen sind flüchtig' || echo 'aus')\n"
     report+="WLAN '${ssid}' · Profil: ${wifi:-keins aktiv}\n"
     report+="IP: ${ip:-keine}   Sendeleistung: ${txp:-unbekannt}\n\n"
     report+="Dienste:\n"
@@ -818,13 +880,16 @@ menu_power() {
 
 while true; do
     header="Gerät $(cfg_get device_id '?') · $(cfg_get role '?') · $(ip -4 -o addr show wlan0 2>/dev/null | awk '{print $4}' | head -1)
-Stand: $(repo_version)"
-    choice=$(whiptail --title "$TITLE — Wartung" --menu "$header" 22 74 11 \
+Stand: $(repo_version)$(overlay_active && echo '
+SCHREIBSCHUTZ AKTIV — Änderungen überleben keinen Neustart')"
+    # Box kept short enough for a plain 80x24 terminal; the list scrolls.
+    choice=$(whiptail --title "$TITLE — Wartung" --menu "$header" 21 74 10 \
         "status"     "Status anzeigen" \
         "dienste"    "Dienste starten / stoppen / neu starten" \
         "rolle"      "Rolle und Geräte-ID ändern" \
         "wlan"       "WLAN und Sendeleistung" \
         "aufloesung" "Bildschirmauflösung" \
+        "schutz"     "Schreibschutz gegen Stromausfall" \
         "pin"        "Debug-PIN ändern" \
         "video"      "Video dieses Geräts austauschen" \
         "splash"     "Startbild ändern" \
@@ -838,6 +903,7 @@ Stand: $(repo_version)"
         rolle)      menu_role ;;
         wlan)       menu_wifi ;;
         aufloesung) menu_resolution ;;
+        schutz)     menu_overlay ;;
         pin)        menu_pin ;;
         video)      menu_video ;;
         splash)     menu_splash ;;
