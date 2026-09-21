@@ -137,19 +137,41 @@ fi
 ARGS+=(--pin "$PIN")
 
 SPLASH=""
-if whiptail --title "$TITLE — Bootscreen" --yesno \
-"Eigenes Startbild einrichten?
-
-Empfohlene Auflösung: die native Auflösung des Displays
-(bei 4K-Bildschirmen 3840×2160), Format PNG." 12 74; then
-    SPLASH=$(whiptail --title "$TITLE — Bootscreen" --inputbox "Pfad zur PNG-Datei:" 10 74 \
-             "/home/${SUDO_USER:-pi}/" 3>&1 1>&2 2>&3) || SPLASH=""
-    if [[ -n $SPLASH && ! -f $SPLASH ]]; then
-        whiptail --title "$TITLE" --msgbox "Datei nicht gefunden — Startbild bleibt unverändert." 8 70
-        SPLASH=""
-    fi
-    [[ -n $SPLASH ]] && ARGS+=(--splash "$SPLASH")
+splash_entries=()
+# The repository ships per-device images; offer the matching one first
+if [[ -f $SCRIPT_DIR/Blaufilter_$ID.png ]]; then
+    splash_entries+=("$SCRIPT_DIR/Blaufilter_$ID.png" "mitgeliefert — für Gerät $ID")
 fi
+for f in "$SCRIPT_DIR"/Blaufilter_*.png; do
+    [[ -f $f ]] || continue
+    [[ $f == "$SCRIPT_DIR/Blaufilter_$ID.png" ]] && continue
+    splash_entries+=("$f" "mitgeliefert")
+done
+while IFS= read -r f; do
+    splash_entries+=("$f" "$(du -h "$f" 2>/dev/null | cut -f1)")
+done < <(find /home /media /mnt -maxdepth 4 -type f -iname '*.png' 2>/dev/null | head -10)
+splash_entries+=("MANUELL" "Pfad selbst eingeben")
+splash_entries+=("KEINS" "Startbild unverändert lassen")
+
+SPLASH=$(whiptail --title "$TITLE — Startbild" --menu \
+"Bild, das beim Hochfahren angezeigt wird.
+
+Am besten passt die native Auflösung des Displays
+(bei 4K-Bildschirmen 3840×2160), Format PNG." 20 78 9 \
+    "${splash_entries[@]}" 3>&1 1>&2 2>&3) || cancelled
+
+case $SPLASH in
+    KEINS) SPLASH="" ;;
+    MANUELL)
+        SPLASH=$(whiptail --title "$TITLE — Startbild" --inputbox "Pfad zur PNG-Datei:" 10 74 \
+                 "/home/${SUDO_USER:-pi}/" 3>&1 1>&2 2>&3) || cancelled
+        ;;
+esac
+if [[ -n $SPLASH && ! -f $SPLASH ]]; then
+    whiptail --title "$TITLE" --msgbox "Datei nicht gefunden — Startbild bleibt unverändert." 8 70
+    SPLASH=""
+fi
+[[ -n $SPLASH ]] && ARGS+=(--splash "$SPLASH")
 
 # -------------------------------------------------------------- confirm
 

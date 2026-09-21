@@ -9,6 +9,7 @@ set -euo pipefail
 
 CONFIG=/etc/blaufilter/config
 VIDEO=/opt/blaufilter/video/main.mp4
+SPLASH_TARGET=/usr/share/plymouth/themes/pix/splash.png
 TITLE="Blaufilter"
 
 if [[ $EUID -ne 0 ]]; then
@@ -120,14 +121,21 @@ PY
 
 # ------------------------------------------------------------------ actions
 
-reinstall() {  # extra install.sh arguments
+# Prints the repository path on stdout, asking for it if the config has none.
+repo_path() {
     local repo; repo=$(cfg_get repo_dir "")
     if [[ -z $repo || ! -x $repo/deploy/install.sh ]]; then
-        if ! repo=$(whiptail --title "$TITLE" --inputbox \
+        repo=$(whiptail --title "$TITLE" --inputbox \
               "Pfad zum blaufilter_vlcsync-Repository:" 10 74 "/home/$BF_USER/blaufilter_vlcsync" \
-              3>&1 1>&2 2>&3); then return 1; fi
+              3>&1 1>&2 2>&3) || return 1
         [[ -x $repo/deploy/install.sh ]] || { msg "Kein install.sh unter:\n$repo"; return 1; }
+        cfg_set repo_dir "$repo"
     fi
+    echo "$repo"
+}
+
+reinstall() {  # extra install.sh arguments
+    local repo; repo=$(repo_path) || return 1
 
     local psk open txp args
     psk=$(current_psk)
@@ -215,29 +223,68 @@ menu_pin() {
     msg "PIN gespeichert.${pin:+\n\nNeue PIN: $pin}"
 }
 
+# VLC is a --user unit, the rest are system units
+svc_action() {  # service action
+    case $1 in
+        vlc) user_systemctl "$2" blaufilter-vlc ;;
+        *)   systemctl "$2" "blaufilter-$1" ;;
+    esac
+}
+
+svc_label() {
+    case $1 in
+        vlc)        echo "Videowiedergabe (VLC)" ;;
+        agent)      echo "Video-Agent" ;;
+        controller) echo "Controller + Web-UI" ;;
+        firewall)   echo "Port-Sperre" ;;
+    esac
+}
+
+# What the user loses while a given service is stopped
+stop_warning() {
+    case $1 in
+        vlc)        echo "Die Wiedergabe endet auf diesem Gerät." ;;
+        agent)      echo "Dieses Gerät nimmt keine Videos mehr entgegen." ;;
+        controller) echo "Web-UI und Synchronisation fallen aus — die Geräte\nspielen weiter, driften aber unkorrigiert auseinander." ;;
+        firewall)   echo "Die Steuerports 4212/4213 stehen dann allen im WLAN offen." ;;
+        alle)       echo "Wiedergabe, Steuerung und Port-Sperre werden beendet." ;;
+    esac
+}
+
 menu_services() {
-    local choice
-    choice=$(whiptail --title "$TITLE — Dienste" --menu "Neu starten:" 17 74 6 \
-        "vlc"        "Videowiedergabe (VLC)" \
-        "agent"      "Video-Agent" \
-        "controller" "Controller + Web-UI (nur Host)" \
-        "firewall"   "Port-Sperre" \
+    local svc action verb services out
+    svc=$(whiptail --title "$TITLE — Dienste" --menu "Welcher Dienst?" 17 74 5 \
+        "vlc"        "$(svc_label vlc)" \
+        "agent"      "$(svc_label agent)" \
+        "controller" "$(svc_label controller) (nur Host)" \
+        "firewall"   "$(svc_label firewall)" \
         "alle"       "alle oben genannten" 3>&1 1>&2 2>&3) || return 0
 
-    local out=""
-    restart_one() {
-        case $1 in
-            vlc) user_systemctl restart blaufilter-vlc 2>&1 ;;
-            *)   systemctl restart "blaufilter-$1" 2>&1 ;;
-        esac
-    }
-    if [[ $choice == alle ]]; then
-        for s in vlc agent controller firewall; do
-            out+="$s: $(restart_one "$s" >/dev/null 2>&1 && echo ok || echo 'fehlgeschlagen/nicht vorhanden')\n"
-        done
-    else
-        out="$choice: $(restart_one "$choice" >/dev/null 2>&1 && echo ok || echo 'fehlgeschlagen/nicht vorhanden')\n"
+    action=$(whiptail --title "$TITLE — Dienste" --menu \
+        "Aktion für: $([[ $svc == alle ]] && echo 'alle Dienste' || svc_label "$svc")" 14 74 3 \
+        "restart" "Neu starten" \
+        "stop"    "Stoppen" \
+        "start"   "Starten" 3>&1 1>&2 2>&3) || return 0
+
+    if [[ $action == stop ]]; then
+        yes_no "Wirklich stoppen?\n\n$(stop_warning "$svc")\n\nNach einem Neustart des Geräts laufen die Dienste\nwieder von selbst." 14 || return 0
     fi
+
+    [[ $svc == alle ]] && services=(vlc agent controller firewall) || services=("$svc")
+    case $action in
+        start) verb="gestartet" ;;
+        stop)  verb="gestoppt" ;;
+        *)     verb="neu gestartet" ;;
+    esac
+
+    out=""
+    for s in "${services[@]}"; do
+        if svc_action "$s" "$action" >/dev/null 2>&1; then
+            out+="$(svc_label "$s"): $verb\n"
+        else
+            out+="$(svc_label "$s"): fehlgeschlagen / nicht vorhanden\n"
+        fi
+    done
     msg "$out"
 }
 
@@ -263,6 +310,72 @@ menu_video() {
     chown "$BF_USER:$BF_USER" "$VIDEO"
     user_systemctl restart blaufilter-vlc >/dev/null 2>&1 || true
     msg "Video ersetzt und VLC neu gestartet."
+}
+
+png_size() {  # path -> "1920x1080", empty if not a readable PNG
+    python3 - "$1" <<'PY' 2>/dev/null
+import struct, sys
+with open(sys.argv[1], "rb") as fh:
+    head = fh.read(24)
+if head[:8] == b"\x89PNG\r\n\x1a\n":
+    print("%dx%d" % struct.unpack(">II", head[16:24]))
+PY
+}
+
+menu_splash() {
+    local repo id entries=() path size
+    repo=$(repo_path) || return 0
+    id=$(cfg_get device_id "")
+
+    # The repository's own images first, the one matching this device on top
+    if [[ -n $id && -f $repo/deploy/Blaufilter_$id.png ]]; then
+        entries+=("$repo/deploy/Blaufilter_$id.png" "aus dem Repository — für Gerät $id")
+    fi
+    for f in "$repo"/deploy/Blaufilter_*.png; do
+        [[ -f $f ]] || continue
+        [[ -n $id && $f == "$repo/deploy/Blaufilter_$id.png" ]] && continue
+        entries+=("$f" "aus dem Repository")
+    done
+    while IFS= read -r f; do
+        entries+=("$f" "$(du -h "$f" 2>/dev/null | cut -f1)")
+    done < <(find /home /media /mnt -maxdepth 4 -type f -iname '*.png' 2>/dev/null | head -15)
+    entries+=("MANUELL" "Pfad selbst eingeben")
+    [[ -f $SPLASH_TARGET.orig ]] && entries+=("ORIGINAL" "Ursprüngliches Startbild wiederherstellen")
+
+    path=$(whiptail --title "$TITLE — Startbild" --menu \
+        "Bild, das beim Hochfahren angezeigt wird:" 20 78 10 \
+        "${entries[@]}" 3>&1 1>&2 2>&3) || return 0
+
+    if [[ $path == ORIGINAL ]]; then
+        yes_no "Ursprüngliches Startbild wiederherstellen?\n\nWirkt ab dem nächsten Neustart." 10 || return 0
+        clear
+        echo "== Startbild wird zurückgesetzt, initramfs wird neu gebaut =="
+        cp "$SPLASH_TARGET.orig" "$SPLASH_TARGET"
+        command -v update-initramfs >/dev/null && update-initramfs -u
+        read -rp "Fertig. Enter drücken…" _
+        return 0
+    fi
+
+    if [[ $path == MANUELL ]]; then
+        path=$(whiptail --title "$TITLE — Startbild" --inputbox "Pfad zur PNG-Datei:" 10 74 \
+               "/home/$BF_USER/" 3>&1 1>&2 2>&3) || return 0
+    fi
+    [[ -f $path ]] || { msg "Datei nicht gefunden:\n$path"; return 0; }
+
+    size=$(png_size "$path")
+    if [[ -z $size ]]; then
+        yes_no "Das scheint keine PNG-Datei zu sein:\n$path\n\nTrotzdem verwenden?" 11 || return 0
+    fi
+    yes_no "Startbild ersetzen?\n\n$path\nAuflösung: ${size:-unbekannt}\n\nAm besten passt die native Auflösung des Displays;\nAbweichendes wird skaliert. Wirkt ab dem nächsten\nNeustart." 15 || return 0
+
+    clear
+    echo "== Startbild wird gesetzt, initramfs wird neu gebaut =="
+    echo
+    if BF_SPLASH="$path" bash "$repo/deploy/steps/50-splash.sh"; then
+        echo; read -rp "Fertig — wirkt ab dem nächsten Neustart. Enter drücken…" _
+    else
+        echo; read -rp "FEHLGESCHLAGEN — Ausgabe oben prüfen. Enter drücken…" _
+    fi
 }
 
 menu_logs() {
@@ -296,13 +409,14 @@ menu_power() {
 
 while true; do
     header="Gerät $(cfg_get device_id '?') · $(cfg_get role '?') · $(ip -4 -o addr show wlan0 2>/dev/null | awk '{print $4}' | head -1)"
-    choice=$(whiptail --title "$TITLE — Wartung" --menu "$header" 20 74 9 \
+    choice=$(whiptail --title "$TITLE — Wartung" --menu "$header" 21 74 10 \
         "status"   "Status anzeigen" \
-        "dienste"  "Dienste neu starten" \
+        "dienste"  "Dienste starten / stoppen / neu starten" \
         "rolle"    "Rolle und Geräte-ID ändern" \
         "wlan"     "WLAN und Sendeleistung" \
         "pin"      "Debug-PIN ändern" \
         "video"    "Video dieses Geräts austauschen" \
+        "splash"   "Startbild ändern" \
         "logs"     "Protokolle ansehen" \
         "power"    "Neu starten / Herunterfahren" \
         "ende"     "Beenden" 3>&1 1>&2 2>&3) || break
@@ -314,6 +428,7 @@ while true; do
         wlan)    menu_wifi ;;
         pin)     menu_pin ;;
         video)   menu_video ;;
+        splash)  menu_splash ;;
         logs)    menu_logs ;;
         power)   menu_power ;;
         ende)    break ;;

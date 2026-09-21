@@ -161,9 +161,15 @@ Das Script richtet ein:
 Mit `--splash bild.png` ersetzt die Installation das Boot-Splash-Bild
 (Plymouth-Theme „pix"). **Empfohlene Auflösung: die native Auflösung des
 Displays** — bei 4K-Bildschirmen 3840×2160; 1920×1080 funktioniert ebenfalls
-und wird skaliert. Format: PNG. Das Original wird als
-`/usr/share/plymouth/themes/pix/splash.png.orig` gesichert (zum
-Wiederherstellen zurückkopieren und `sudo update-initramfs -u` ausführen).
+und wird skaliert. Format: PNG.
+
+Im Verzeichnis `deploy/` liegen fertige Startbilder `Blaufilter_1.png` bis
+`Blaufilter_3.png`; Assistent und Wartungsmenü schlagen automatisch das zur
+Geräte-ID passende vor.
+
+Das Original wird als `/usr/share/plymouth/themes/pix/splash.png.orig`
+gesichert — „Startbild ändern" im Wartungsmenü holt es auf Wunsch zurück
+(von Hand: zurückkopieren und `sudo update-initramfs -u`).
 
 ### Namensauflösung `blaufilter.local`
 
@@ -269,11 +275,12 @@ am Bildschirm wie über SSH:
 | Punkt | Zweck |
 |---|---|
 | **Status anzeigen** | Rolle, IP, Sendeleistung, Zustand aller Dienste; auf dem Host zusätzlich verbundene Geräte mit Drift und offene Hinweise |
-| **Dienste neu starten** | VLC, Video-Agent, Controller, Port-Sperre — einzeln oder alle |
+| **Dienste starten / stoppen / neu starten** | VLC, Video-Agent, Controller, Port-Sperre — einzeln oder alle. Vor dem Stoppen wird gezeigt, was dadurch ausfällt; nach einem Geräteneustart laufen sie wieder von selbst |
 | **Rolle und Geräte-ID ändern** | Der Klon-Fall: SD-Karte kopiert, Gerät soll Client statt Host sein. Räumt die Einstellungen der alten Rolle auf |
 | **WLAN und Sendeleistung** | SSID, offen/WPA2, Sendeleistung ändern |
 | **Debug-PIN ändern** | PIN der Debug-Seite setzen oder Abfrage abschalten |
 | **Video austauschen** | Lokale Datei einsetzen (Verteilung auf alle Geräte macht das Web-UI) |
+| **Startbild ändern** | Mitgelieferte Bilder (`Blaufilter_<ID>.png`), eigene PNGs oder das ursprüngliche Startbild zurückholen; zeigt vorher die Auflösung an |
 | **Protokolle ansehen** | Journal von Controller, Agent, NetworkManager und VLC |
 
 Änderungen an Rolle oder WLAN lassen das Installationsscript erneut laufen —
