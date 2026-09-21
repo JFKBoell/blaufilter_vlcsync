@@ -278,6 +278,7 @@ am Bildschirm wie über SSH:
 | **Dienste starten / stoppen / neu starten** | VLC, Video-Agent, Controller, Port-Sperre — einzeln oder alle. Vor dem Stoppen wird gezeigt, was dadurch ausfällt; nach einem Geräteneustart laufen sie wieder von selbst |
 | **Rolle und Geräte-ID ändern** | Der Klon-Fall: SD-Karte kopiert, Gerät soll Client statt Host sein. Räumt die Einstellungen der alten Rolle auf |
 | **WLAN und Sendeleistung** | SSID, offen/WPA2, Sendeleistung ändern — dauert Sekunden, da nur die Netzwerkeinstellungen neu geschrieben werden. Das Passwort lässt sich beibehalten, ohne es erneut einzutippen |
+| **Bildschirmauflösung** | Auflösung und Bildwiederholrate fest einstellen oder wieder dem Bildschirm überlassen (siehe unten) |
 | **Debug-PIN ändern** | PIN der Debug-Seite setzen oder Abfrage abschalten |
 | **Video austauschen** | Lokale Datei einsetzen (Verteilung auf alle Geräte macht das Web-UI) |
 | **Startbild ändern** | Mitgelieferte Bilder (`Blaufilter_<ID>.png`), eigene PNGs oder das ursprüngliche Startbild zurückholen; zeigt vorher die Auflösung an |
@@ -299,6 +300,28 @@ zu Ende geführt; nach dem erneuten Verbinden steht das Ergebnis in
 > des Originals. `sudo blaufilter-setup` → „Rolle und Geräte-ID ändern"
 > stellt das gerade; sonst spannen zwei Geräte ein WLAN namens `Blaufilter`
 > auf und die Clients finden den Host nicht mehr.
+
+### Bildschirmauflösung
+
+Das Menü liest die möglichen Auflösungen direkt beim Grafiktreiber aus
+(`/sys/class/drm`) — es braucht also keine laufende Desktop-Sitzung und
+funktioniert auch per SSH. Die erste angebotene Auflösung ist die, die der
+Bildschirm selbst bevorzugt.
+
+Festgelegt wird die Auswahl über den Kernel-Parameter
+`video=HDMI-A-1:3840x2160@30` in der `cmdline.txt`. Das wirkt auf **Konsole,
+Startbild und Wiedergabe gleichermaßen** und greift ab dem nächsten Neustart.
+Die bisherige Boot-Zeile wird als `cmdline.txt.bak` gesichert; das Menü
+schreibt außerdem nur, wenn die erzeugte Zeile noch wie eine gültige
+Kernel-Befehlszeile aussieht.
+
+Zwei Punkte zur Pi-4-Hardware:
+
+- **4K mit 60 Hz** ist ab Werk abgeschaltet. Wird es gewählt, bietet das Menü
+  an, `hdmi_enable_4kp60=1` in die `config.txt` einzutragen — und das Kabel
+  muss im HDMI-Anschluss **neben dem Stromanschluss** stecken.
+- **4K mit 30 Hz** ist für die Wiedergabe die unkompliziertere Wahl und für
+  4K-Material mit 24–30 fps völlig ausreichend.
 
 ### Updates einspielen
 

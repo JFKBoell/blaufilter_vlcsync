@@ -12,6 +12,10 @@ VIDEO=/opt/blaufilter/video/main.mp4
 SPLASH_TARGET=/usr/share/plymouth/themes/pix/splash.png
 TITLE="Blaufilter"
 
+BOOT_DIR=/boot/firmware
+[[ -d $BOOT_DIR ]] || BOOT_DIR=/boot
+CMDLINE="$BOOT_DIR/cmdline.txt"
+
 if [[ $EUID -ne 0 ]]; then
     echo "Bitte mit sudo starten: sudo blaufilter-setup" >&2
     exit 1
@@ -433,6 +437,143 @@ menu_splash() {
     fi
 }
 
+# ------------------------------------------------------------- resolution
+#
+# The screen mode is pinned through the kernel's video= parameter rather than a
+# desktop tool: it is read from /sys (no graphical session needed, so this also
+# works over SSH) and applies to console, boot splash and desktop alike.
+
+DRM_ROOT=${DRM_ROOT:-/sys/class/drm}   # overridable so this can be tested
+
+drm_dir_for() {  # connector name -> <DRM_ROOT>/cardX-<connector>
+    local d
+    for d in "$DRM_ROOT"/card*-*; do
+        [[ -d $d && ${d##*/} == *-"$1" ]] && { echo "$d"; return 0; }
+    done
+    return 1
+}
+
+connected_outputs() {
+    local d name
+    for d in "$DRM_ROOT"/card*-*; do
+        [[ -r $d/status ]] || continue
+        [[ $(cat "$d/status") == connected ]] || continue
+        name=${d##*/}
+        echo "${name#*-}"
+    done
+}
+
+mode_label() {
+    case $1 in
+        3840x2160) echo "4K UHD" ;;
+        2560x1440) echo "WQHD" ;;
+        1920x1080) echo "Full HD" ;;
+        1280x720)  echo "HD" ;;
+        *)         echo "—" ;;
+    esac
+}
+
+current_video_setting() {  # connector -> "1920x1080@60" or empty
+    grep -oE "video=$1:[^[:space:]]+" "$CMDLINE" 2>/dev/null | head -1 | cut -d: -f2-
+}
+
+set_video_setting() {  # connector value ("" = remove, back to automatic)
+    local conn=$1 value=$2 line
+    line=$(tr '\n' ' ' < "$CMDLINE")
+    line=$(sed -E "s/[[:space:]]*video=${conn}:[^[:space:]]+//g" <<<"$line")
+    [[ -n $value ]] && line="$line video=${conn}:${value}"
+    line=$(tr -s ' ' <<<"$line" | sed 's/^ *//; s/ *$//')
+
+    # A broken cmdline.txt means the Pi does not boot at all — refuse anything
+    # that no longer looks like a kernel command line.
+    if [[ -z $line || $line != *root=* ]]; then
+        msg "Abgebrochen: die erzeugte Boot-Zeile sieht nicht stimmig aus.\nEs wurde nichts verändert."
+        return 1
+    fi
+    cp "$CMDLINE" "$CMDLINE.bak"
+    printf '%s\n' "$line" > "$CMDLINE"
+}
+
+# 4Kp60 is off by default on the Pi 4 and silently falls back without this
+# switch — and it only works on the HDMI port next to the power connector.
+offer_4kp60() {  # mode rate
+    local config_txt="$BOOT_DIR/config.txt"
+    [[ $1 == 3840x2160 && $2 == 60 ]] || return 0
+    [[ -f $config_txt ]] || return 0
+    grep -qE '^[[:space:]]*hdmi_enable_4kp60=1' "$config_txt" && return 0
+    yes_no "4K mit 60 Hz braucht auf dem Pi 4 zusätzlich den Schalter\nhdmi_enable_4kp60=1 in der config.txt — und das Kabel\nmuss im HDMI-Anschluss neben dem Stromanschluss stecken.\n\nSchalter jetzt eintragen?" 14 || return 0
+    cp "$config_txt" "$config_txt.bak"
+    printf '\nhdmi_enable_4kp60=1\n' >> "$config_txt"
+}
+
+menu_resolution() {
+    local outs=() out dir entries=() first=1 m mode value current splash_size hint=""
+    local rate=""
+
+    [[ -f $CMDLINE ]] || { msg "Boot-Konfiguration nicht gefunden:\n$CMDLINE"; return 0; }
+
+    while read -r m; do [[ -n $m ]] && outs+=("$m" "angeschlossen"); done < <(connected_outputs)
+    if (( ${#outs[@]} == 0 )); then
+        msg "Kein angeschlossener Bildschirm erkannt.\n\nSteckt das HDMI-Kabel? Die Liste kommt direkt vom\nGrafiktreiber des Systems."
+        return 0
+    fi
+    if (( ${#outs[@]} > 2 )); then
+        out=$(whiptail --title "$TITLE — Auflösung" --menu "Welcher Anschluss?" 14 74 4 \
+              "${outs[@]}" 3>&1 1>&2 2>&3) || return 0
+    else
+        out=${outs[0]}
+    fi
+
+    dir=$(drm_dir_for "$out") || { msg "Anschluss $out nicht gefunden."; return 0; }
+    current=$(current_video_setting "$out")
+
+    while read -r m; do
+        [[ -n $m ]] || continue
+        if (( first )); then
+            entries+=("$m" "$(mode_label "$m") — vom Bildschirm bevorzugt"); first=0
+        else
+            entries+=("$m" "$(mode_label "$m")")
+        fi
+    done < <(awk '!seen[$0]++' "$dir/modes" 2>/dev/null)
+
+    if (( ${#entries[@]} == 0 )); then
+        msg "Der Bildschirm meldet keine Auflösungen.\n\nDas passiert, wenn kein Bildschirm angeschlossen ist\noder er kein EDID liefert."
+        return 0
+    fi
+    entries+=("AUTO" "automatisch — Bildschirm entscheidet")
+
+    mode=$(whiptail --title "$TITLE — Auflösung" --menu \
+        "Auflösung für $out\n\nAktuell fest eingestellt: ${current:-automatisch}" 20 74 9 \
+        "${entries[@]}" 3>&1 1>&2 2>&3) || return 0
+
+    if [[ $mode == AUTO ]]; then
+        value=""
+    else
+        rate=$(whiptail --title "$TITLE — Bildwiederholrate" --menu \
+            "Bildwiederholrate für $mode:" 16 74 4 \
+            ""   "automatisch (empfohlen)" \
+            "60" "60 Hz" \
+            "50" "50 Hz" \
+            "30" "30 Hz — für 4K auf dem Pi 4 die sichere Wahl" 3>&1 1>&2 2>&3) || return 0
+        value="$mode${rate:+@$rate}"
+    fi
+
+    hint=""
+    if [[ -n $value && -f $SPLASH_TARGET ]]; then
+        splash_size=$(png_size "$SPLASH_TARGET")
+        [[ -n $splash_size && $splash_size != "$mode" ]] && \
+            hint="\n\nHinweis: das Startbild hat $splash_size und wird skaliert."
+    fi
+
+    yes_no "Auflösung fest einstellen?\n\nAnschluss: $out\nAuflösung: ${value:-automatisch}\n\nWirkt nach einem Neustart — auf Konsole, Startbild und\nWiedergabe. Die bisherige Boot-Zeile wird als\ncmdline.txt.bak gesichert.$hint" 18 || return 0
+
+    set_video_setting "$out" "$value" || return 0
+    [[ -n $value ]] && offer_4kp60 "$mode" "$rate"
+    if yes_no "Gespeichert.\n\nJetzt neu starten, damit die Auflösung wirkt?" 10; then
+        systemctl reboot
+    fi
+}
+
 menu_logs() {
     local unit
     unit=$(whiptail --title "$TITLE — Protokolle" --menu "Welches Protokoll?" 16 74 4 \
@@ -464,29 +605,31 @@ menu_power() {
 
 while true; do
     header="Gerät $(cfg_get device_id '?') · $(cfg_get role '?') · $(ip -4 -o addr show wlan0 2>/dev/null | awk '{print $4}' | head -1)"
-    choice=$(whiptail --title "$TITLE — Wartung" --menu "$header" 21 74 10 \
-        "status"   "Status anzeigen" \
-        "dienste"  "Dienste starten / stoppen / neu starten" \
-        "rolle"    "Rolle und Geräte-ID ändern" \
-        "wlan"     "WLAN und Sendeleistung" \
-        "pin"      "Debug-PIN ändern" \
-        "video"    "Video dieses Geräts austauschen" \
-        "splash"   "Startbild ändern" \
-        "logs"     "Protokolle ansehen" \
-        "power"    "Neu starten / Herunterfahren" \
-        "ende"     "Beenden" 3>&1 1>&2 2>&3) || break
+    choice=$(whiptail --title "$TITLE — Wartung" --menu "$header" 22 74 11 \
+        "status"     "Status anzeigen" \
+        "dienste"    "Dienste starten / stoppen / neu starten" \
+        "rolle"      "Rolle und Geräte-ID ändern" \
+        "wlan"       "WLAN und Sendeleistung" \
+        "aufloesung" "Bildschirmauflösung" \
+        "pin"        "Debug-PIN ändern" \
+        "video"      "Video dieses Geräts austauschen" \
+        "splash"     "Startbild ändern" \
+        "logs"       "Protokolle ansehen" \
+        "power"      "Neu starten / Herunterfahren" \
+        "ende"       "Beenden" 3>&1 1>&2 2>&3) || break
 
     case $choice in
-        status)  status_report ;;
-        dienste) menu_services ;;
-        rolle)   menu_role ;;
-        wlan)    menu_wifi ;;
-        pin)     menu_pin ;;
-        video)   menu_video ;;
-        splash)  menu_splash ;;
-        logs)    menu_logs ;;
-        power)   menu_power ;;
-        ende)    break ;;
+        status)     status_report ;;
+        dienste)    menu_services ;;
+        rolle)      menu_role ;;
+        wlan)       menu_wifi ;;
+        aufloesung) menu_resolution ;;
+        pin)        menu_pin ;;
+        video)      menu_video ;;
+        splash)     menu_splash ;;
+        logs)       menu_logs ;;
+        power)      menu_power ;;
+        ende)       break ;;
     esac
 done
 clear
