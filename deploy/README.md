@@ -286,7 +286,7 @@ ein Doppelklick öffnet das Menü, ohne Terminal und ohne SSH.
 | **Status anzeigen** | Rolle, IP, Sendeleistung, Zustand aller Dienste; auf dem Host zusätzlich verbundene Geräte mit Drift und offene Hinweise |
 | **Dienste starten / stoppen / neu starten** | VLC, Video-Agent, Controller, Port-Sperre — einzeln oder alle. Vor dem Stoppen wird gezeigt, was dadurch ausfällt; nach einem Geräteneustart laufen sie wieder von selbst |
 | **Rolle und Geräte-ID ändern** | Der Klon-Fall: SD-Karte kopiert, Gerät soll Client statt Host sein. Räumt die Einstellungen der alten Rolle auf |
-| **WLAN und Sendeleistung** | SSID, offen/WPA2, Sendeleistung ändern — dauert Sekunden, da nur die Netzwerkeinstellungen neu geschrieben werden. Das Passwort lässt sich beibehalten, ohne es erneut einzutippen |
+| **WLAN** | Eigenes WLAN ändern (SSID, offen/WPA2, Sendeleistung) — dauert Sekunden, da nur die Netzwerkeinstellungen neu geschrieben werden, Passwort auf Wunsch beibehalten. Außerdem: in ein anderes Netz wechseln und wieder zurück (siehe unten) |
 | **Bildschirmauflösung** | Auflösung und Bildwiederholrate fest einstellen oder wieder dem Bildschirm überlassen (siehe unten) |
 | **Debug-PIN ändern** | PIN der Debug-Seite setzen oder Abfrage abschalten |
 | **Video austauschen** | Lokale Datei einsetzen (Verteilung auf alle Geräte macht das Web-UI) |
@@ -309,6 +309,31 @@ zu Ende geführt; nach dem erneuten Verbinden steht das Ergebnis in
 > des Originals. `sudo blaufilter-setup` → „Rolle und Geräte-ID ändern"
 > stellt das gerade; sonst spannen zwei Geräte ein WLAN namens `Blaufilter`
 > auf und die Clients finden den Host nicht mehr.
+
+### In ein anderes Netz wechseln (für Updates)
+
+Unter **WLAN → In ein anderes Netz wechseln** listet das Menü die
+gespeicherten Netze auf; ein neues lässt sich mit SSID und Passwort
+eintragen. Gedacht ist das fürs Entwickeln: kurz in ein Netz mit
+Internetzugang wechseln, aktualisieren, zurückwechseln.
+
+Das ist der einzige Menüpunkt, mit dem man ein Gerät aus seinem eigenen Netz
+aussperren könnte — deshalb zwei Sicherungen:
+
+- **Scheitert der Beitritt**, aktiviert das Gerät von selbst wieder sein
+  Blaufilter-Profil.
+- **Nach jedem Neustart** ist das Gerät wieder im Blaufilter-WLAN: das
+  fremde Profil wird auf `autoconnect no` gesetzt. Im Zweifel hilft also ein
+  Stromkabel ziehen.
+
+Solange der Host in einem fremden Netz hängt, ist das Blaufilter-WLAN weg —
+Clients und Web-UI sind dann nicht erreichbar. Die neue Adresse des Geräts
+steht nach dem Wechsel im Protokoll (`/var/log/blaufilter-setup.log`), da die
+alte Verbindung dabei abbricht. Zurück geht es über **WLAN → Zurück ins
+Blaufilter-WLAN**.
+
+Im AP-Betrieb kann das Funkmodul meist nicht nach Netzen suchen; der
+Netzwerkname wird dann eingetippt statt aus einer Liste gewählt.
 
 ### Bildschirmauflösung
 

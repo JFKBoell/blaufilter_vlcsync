@@ -212,6 +212,115 @@ menu_role() {
     reinstall --id "$id" --role "$role" || true
 }
 
+# ------------------------------------------------- joining a foreign network
+#
+# For development: hop onto a network with internet to pull updates, then come
+# back. Two safeguards, because this is the one action that can lock the device
+# out of its own network: a failed join immediately restores the Blaufilter
+# profile, and the foreign profile is set to autoconnect=no, so a reboot always
+# lands back in the Blaufilter network.
+
+blaufilter_profile() {  # the profile that returns this device to its own network
+    [[ $(cfg_get role host) == host ]] && echo blaufilter-ap || echo blaufilter
+}
+
+known_wifi_profiles() {  # every stored WiFi profile except our own
+    nmcli -t -f NAME,TYPE connection show 2>/dev/null \
+        | awk -F: '$2 ~ /wireless/ {print $1}' \
+        | grep -vxE 'blaufilter|blaufilter-ap' || true
+}
+
+join_network() {  # profile-name
+    local profile=$1 home
+    home=$(blaufilter_profile)
+    nmcli connection modify "$profile" connection.autoconnect no >/dev/null 2>&1 || true
+
+    run_detached "Wechsel in das Netz '$profile'" bash -c '
+        profile=$1; home=$2
+        echo "Verbinde mit $profile ..."
+        if nmcli connection up "$profile"; then
+            echo
+            echo "Verbunden. Adresse dieses Geräts:"
+            ip -4 -o addr show wlan0 | awk "{print \"  \" \$4}"
+            echo
+            echo "Nach einem Neustart ist das Gerät wieder im Blaufilter-WLAN."
+        else
+            echo
+            echo "Beitritt fehlgeschlagen — zurück ins Blaufilter-WLAN."
+            nmcli connection up "$home"
+            exit 1
+        fi
+    ' _ "$profile" "$home"
+}
+
+menu_wifi_join() {
+    local entries=() choice ssid psk profile scan=()
+
+    while read -r p; do
+        [[ -n $p ]] && entries+=("$p" "gespeichertes Netz")
+    done < <(known_wifi_profiles)
+    entries+=("NEU" "anderes Netz eintragen…")
+
+    choice=$(whiptail --title "$TITLE — Anderes Netz" --menu \
+        "In welches Netz wechseln?\n\nZum Aktualisieren über das Internet. Das Blaufilter-WLAN\nist währenddessen weg — Clients und Web-UI sind nicht\nerreichbar, bis dieses Gerät zurückwechselt." 19 74 7 \
+        "${entries[@]}" 3>&1 1>&2 2>&3) || return 0
+
+    if [[ $choice != NEU ]]; then
+        yes_no "Jetzt in '$choice' wechseln?\n\nDie WLAN-Verbindung bricht dabei ab. Scheitert der\nBeitritt, kehrt das Gerät von selbst ins Blaufilter-WLAN\nzurück — ebenso bei jedem Neustart." 14 || return 0
+        join_network "$choice"
+        return 0
+    fi
+
+    # In AP mode the radio usually cannot scan, so typing the name always works
+    while read -r s; do
+        [[ -n $s ]] && scan+=("$s" "gefunden")
+    done < <(nmcli -t -f SSID device wifi list --rescan yes 2>/dev/null \
+             | awk 'NF && !seen[$0]++' | head -12)
+
+    if (( ${#scan[@]} )); then
+        scan+=("MANUELL" "Namen selbst eintippen")
+        ssid=$(whiptail --title "$TITLE — Anderes Netz" --menu \
+            "Gefundene Netze:" 18 74 8 "${scan[@]}" 3>&1 1>&2 2>&3) || return 0
+    else
+        ssid=MANUELL
+    fi
+    if [[ $ssid == MANUELL ]]; then
+        ssid=$(whiptail --title "$TITLE — Anderes Netz" --inputbox \
+            "Name des Netzes (SSID):\n\nIm AP-Betrieb kann dieses Gerät meist nicht nach Netzen\nsuchen — der Name muss daher eingetippt werden." 13 74 \
+            3>&1 1>&2 2>&3) || return 0
+        [[ -n $ssid ]] || return 0
+    fi
+
+    psk=$(whiptail --title "$TITLE — Anderes Netz" --passwordbox \
+        "Passwort für '$ssid'\n(leer lassen, wenn das Netz offen ist):" 11 74 3>&1 1>&2 2>&3) || return 0
+
+    profile="dev-$ssid"
+    nmcli connection delete "$profile" >/dev/null 2>&1 || true
+    if [[ -n $psk ]]; then
+        nmcli connection add type wifi ifname wlan0 con-name "$profile" ssid "$ssid" \
+            wifi-sec.key-mgmt wpa-psk wifi-sec.psk "$psk" \
+            connection.autoconnect no >/dev/null 2>&1
+    else
+        nmcli connection add type wifi ifname wlan0 con-name "$profile" ssid "$ssid" \
+            connection.autoconnect no >/dev/null 2>&1
+    fi
+    if ! nmcli connection show "$profile" >/dev/null 2>&1; then
+        msg "Das Netzprofil konnte nicht angelegt werden."
+        return 0
+    fi
+    join_network "$profile"
+}
+
+menu_wifi_back() {
+    local home; home=$(blaufilter_profile)
+    yes_no "Zurück ins Blaufilter-WLAN wechseln?\n\nProfil: $home" 10 || return 0
+    run_detached "Zurück ins Blaufilter-WLAN" bash -c '
+        nmcli connection up "$1"
+        echo
+        ip -4 -o addr show wlan0 | awk "{print \"  \" \$4}"
+    ' _ "$home"
+}
+
 apply_txpower() {  # repo value ("" = back to the driver maximum)
     local repo=$1 txp=$2
     if [[ -n $txp ]]; then
@@ -223,11 +332,27 @@ apply_txpower() {  # repo value ("" = back to the driver maximum)
     fi
 }
 
+menu_wifi() {
+    local choice active
+    active=$(nmcli -t -f NAME,DEVICE connection show --active 2>/dev/null \
+             | awk -F: '$2=="wlan0"{print $1}' | head -1)
+    choice=$(whiptail --title "$TITLE — WLAN" --menu \
+        "Aktives Profil: ${active:-keins}" 15 74 3 \
+        "ap"     "Eigenes WLAN einrichten (SSID, Passwort, Leistung)" \
+        "join"   "In ein anderes Netz wechseln (Entwicklung)" \
+        "zurueck" "Zurück ins Blaufilter-WLAN" 3>&1 1>&2 2>&3) || return 0
+    case $choice in
+        ap)      menu_wifi_ap ;;
+        join)    menu_wifi_join ;;
+        zurueck) menu_wifi_back ;;
+    esac
+}
+
 # Only the network step runs here — not the whole installer. Changing an SSID
 # has no business reinstalling packages, systemd units and the Python package.
 # (A role change does go through the installer: that one really does rearrange
 # the whole device.)
-menu_wifi() {
+menu_wifi_ap() {
     local repo role id ssid open psk txp step
     repo=$(repo_path) || return 0
     role=$(cfg_get role host)
