@@ -25,6 +25,8 @@ class EmulatedPlayer:
         self.length = length
         self.rate = 1.0
         self.state = "playing" if playing else "paused"
+        self.report_state_override = None
+        """Simulate VLC's settling lag: report this state regardless of reality."""
         self.volume = 256
         self._base = start_position
         self._t0 = time.time()
@@ -78,7 +80,7 @@ class EmulatedPlayer:
         cmd, _, arg = line.partition(" ")
 
         if cmd == "status":
-            return f"( state {self.state} )"
+            return f"( state {self.report_state_override or self.state} )"
         if cmd == "get_time":
             return str(int(self.position()))
         if cmd == "get_length":
@@ -110,8 +112,8 @@ class EmulatedPlayer:
 
 class _RcHandler(socketserver.StreamRequestHandler):
     def handle(self):
-        # vlcsync sets a 0.5s global default socket timeout on import; the RC
-        # connection must survive arbitrary idle periods like real VLC does.
+        # Idle-tolerant like real VLC; connect/recv timeouts are set per-client
+        # socket in VlcSocket (no process-wide socket.setdefaulttimeout).
         self.connection.settimeout(None)
         self.wfile.write(b"> ")
         while True:

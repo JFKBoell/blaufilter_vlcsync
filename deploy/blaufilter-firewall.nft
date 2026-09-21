@@ -1,0 +1,27 @@
+#!/usr/sbin/nft -f
+# Only the host controller may reach the control ports of a device:
+#   4212  VLC RC interface — has no authentication of its own at all
+#   4213  video agent      — accepts uploads and VLC restarts unauthenticated
+# Without this, anyone on the WiFi could stop playback or replace the video,
+# which matters most on an open network (install.sh --open).
+#
+# A dedicated table with policy accept: this only guards those two ports and
+# leaves the rest of the system's firewalling (SSH, everything else) untouched.
+
+# create-then-delete makes re-applying idempotent
+table inet blaufilter
+delete table inet blaufilter
+
+table inet blaufilter {
+    chain input {
+        type filter hook input priority filter; policy accept;
+
+        # The controller runs on the host (192.168.4.1); loopback covers the
+        # host talking to its own VLC.
+        tcp dport { 4212, 4213 } ip saddr { 127.0.0.0/8, 192.168.4.1 } accept
+
+        # Everyone else on the network — visitors' phones included. Also drops
+        # IPv6 on these ports, which never matches the IPv4 rule above.
+        tcp dport { 4212, 4213 } drop
+    }
+}

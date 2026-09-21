@@ -17,9 +17,12 @@ from tests.rc_emulator import EmulatedPlayer, RcServerEmulator
 def stack(request):
     servers, envs = [], []
 
-    def build(players):
+    def build(players, **cfg_overrides):
         servers.extend(RcServerEmulator(p) for p in players)
-        cfg = BlaufilterConfig(dev_hosts=[s.address for s in servers])
+        # Off by default: a random start seek would show up in the seek counts
+        # and starting positions the sync tests set up deliberately.
+        cfg_overrides.setdefault("random_start", False)
+        cfg = BlaufilterConfig(dev_hosts=[s.address for s in servers], **cfg_overrides)
         env = VlcProcs({StaticCandidateFinder(cfg)})
         envs.append(env)
         return servers, Controller(cfg, env)
@@ -93,7 +96,8 @@ def test_drift_triggers_exactly_one_correction(stack):
         EmulatedPlayer(length=3600, start_position=100),
         EmulatedPlayer(length=3600, start_position=100),
     ]
-    servers, controller = stack(players)
+    # Force the seek path: low threshold, no smooth nudge
+    servers, controller = stack(players, drift_threshold=0.5, rate_nudge=False)
 
     assert tick_until(controller, lambda: len(controller.devices) == 2)
     assert tick_until(controller,
@@ -158,6 +162,180 @@ def test_rate_change_causes_no_false_corrections(stack):
         assert not player.seeks_received()
 
 
+def test_moderate_drift_uses_rate_nudge_not_seek(stack):
+    """Default behavior: drift below the seek threshold is corrected smoothly
+    via a temporary rate skew — no seek, so no visible stutter."""
+    players = [
+        EmulatedPlayer(length=3600, start_position=500),
+        EmulatedPlayer(length=3600, start_position=500),
+    ]
+    servers, controller = stack(players)  # defaults: threshold 3.0, nudge on
+
+    assert tick_until(controller, lambda: len(controller.devices) == 2)
+    assert tick_until(controller,
+                      lambda: all(d.last_position is not None for d in controller.devices.values()))
+
+    (slave_server, slave_device), = slave_pairs(controller, servers)
+    slave_server.player.apply_skew(1.0)  # below threshold -> nudge territory
+
+    assert tick_until(controller, lambda: slave_device.nudging, timeout=8.0), \
+        "moderate drift must trigger a rate nudge"
+    assert slave_server.player.rate != pytest.approx(1.0), "nudge must skew the rate"
+    assert not slave_server.player.seeks_received(), "no seek for moderate drift"
+
+    # Nudge converges: skewed rate pulls the position back until drift is gone,
+    # then the desired rate is restored
+    assert tick_until(controller,
+                      lambda: not slave_device.nudging
+                      and slave_device.last_drift is not None
+                      and abs(slave_device.last_drift) < 0.3,
+                      timeout=60.0)
+    assert slave_server.player.rate == pytest.approx(1.0)
+    assert not slave_server.player.seeks_received()
+
+
+def test_seek_cooldown_backs_off_on_rapid_recorrection(stack):
+    players = [
+        EmulatedPlayer(length=3600, start_position=100),
+        EmulatedPlayer(length=3600, start_position=100),
+    ]
+    servers, controller = stack(players, drift_threshold=0.5, rate_nudge=False,
+                                cooldown_s=1.0)
+
+    assert tick_until(controller, lambda: len(controller.devices) == 2)
+    assert tick_until(controller,
+                      lambda: all(d.last_position is not None for d in controller.devices.values()))
+
+    (slave_server, slave_device), = slave_pairs(controller, servers)
+    slave_server.player.apply_skew(2.0)
+    assert tick_until(controller, lambda: len(slave_server.player.seeks_received()) == 1,
+                      timeout=8.0)
+    first_cooldown = slave_device.seek_cooldown_s
+    assert first_cooldown == pytest.approx(1.0)
+
+    # Immediately drift again: the second correction must back off
+    slave_server.player.apply_skew(2.0)
+    assert tick_until(controller, lambda: len(slave_server.player.seeks_received()) == 2,
+                      timeout=8.0)
+    assert slave_device.seek_cooldown_s > first_cooldown
+
+
+def pause_cmds(player):
+    return [c for c in player.received if c.strip() == "pause"]
+
+
+def test_pause_enforcement_does_not_toggle_back(stack):
+    """RC 'pause' toggles, and VLC's status report can lag the real state by
+    seconds. A stale 'playing' report must never trigger a second 'pause'
+    (which would resume playback) — only MOVEMENT after the command may."""
+    players = [
+        EmulatedPlayer(length=3600, start_position=10),
+        EmulatedPlayer(length=3600, start_position=10),
+    ]
+    servers, controller = stack(players)
+    assert tick_until(controller, lambda: len(controller.devices) == 2)
+    tick_for(controller, 1.2)  # warm up movement tracking
+
+    # Status permanently lies 'playing' — much longer than any grace timer
+    for server in servers:
+        server.player.report_state_override = "playing"
+
+    controller.pause()
+    for player in (s.player for s in servers):
+        assert len(pause_cmds(player)) == 1
+        assert player.state == "paused"
+
+    # Enforcement keeps running against the lying status: position is frozen,
+    # so no re-send may happen, no matter how long
+    tick_for(controller, 3.0)
+    for player in (s.player for s in servers):
+        assert len(pause_cmds(player)) == 1, "stale status must not re-toggle"
+        assert player.state == "paused"
+
+
+def test_pause_resends_when_playback_provably_continues(stack):
+    """If the pause command did not stick (device keeps advancing), the
+    movement proof triggers exactly the needed re-send."""
+    players = [EmulatedPlayer(length=3600, start_position=10)]
+    servers, controller = stack(players)
+    assert tick_until(controller, lambda: len(controller.devices) == 1)
+    tick_for(controller, 1.2)
+
+    controller.pause()
+    player = servers[0].player
+    assert len(pause_cmds(player)) == 1
+
+    # Simulate a lost/failed pause: device silently keeps playing
+    player.play()
+    assert tick_until(controller, lambda: len(pause_cmds(player)) >= 2, timeout=10.0), \
+        "provable movement after the pause command must trigger a re-send"
+    assert player.state == "paused"
+
+
+def test_play_recovers_from_stalled_playback(stack):
+    """Desired PLAYING + frozen position -> send 'play' even when the status
+    report claims 'playing'. Heals the all-devices-halted condition."""
+    players = [EmulatedPlayer(length=3600, start_position=10)]
+    servers, controller = stack(players)
+    assert tick_until(controller, lambda: len(controller.devices) == 1)
+    tick_for(controller, 1.2)
+
+    player = servers[0].player
+    # Device is actually paused but its status lies 'playing'
+    player.pause_toggle()
+    player.report_state_override = "playing"
+
+    assert tick_until(controller, lambda: player.state == "playing", timeout=10.0), \
+        "frozen position with desired PLAYING must trigger a recovery 'play'"
+
+
+def test_single_connection_error_does_not_drop_device(stack):
+    players = [EmulatedPlayer(length=3600, start_position=10)]
+    servers, controller = stack(players)
+    assert tick_until(controller, lambda: len(controller.devices) == 1)
+
+    device = next(iter(controller.devices.values()))
+    from vlcsync.vlc_socket import VlcConnectionError
+    vlc_id = next(iter(controller.devices))
+    controller._conn_fail(vlc_id, device)
+    assert len(controller.devices) == 1, "first failure must not drop the device"
+    controller._conn_fail(vlc_id, device)
+    assert len(controller.devices) == 1, "second failure must not drop the device"
+    controller._conn_fail(vlc_id, device)
+    assert len(controller.devices) == 0, "third consecutive failure drops it"
+
+
+def test_seek_random_moves_every_device_to_the_same_spot(stack):
+    players = [
+        EmulatedPlayer(length=3600, start_position=100),
+        EmulatedPlayer(length=3600, start_position=100),
+    ]
+    servers, controller = stack(players)
+    assert tick_until(controller, lambda: len(controller.devices) == 2)
+
+    target = controller.seek_random()
+    assert target is not None and 0 <= target < 3600
+    for server in servers:
+        seeks = server.player.seeks_received()
+        assert seeks, "every device must be moved"
+        assert float(seeks[-1].split()[1]) == pytest.approx(target)
+
+
+def test_random_start_happens_once_after_boot(stack):
+    players = [EmulatedPlayer(length=3600, start_position=100)]
+    servers, controller = stack(players, random_start=True)
+    player = servers[0].player
+
+    assert tick_until(controller, lambda: len(player.seeks_received()) == 1, timeout=8.0), \
+        "playback must start at a random position"
+    start_target = float(player.seeks_received()[0].split()[1])
+    assert 0 <= start_target < 3600
+
+    # It is a one-shot: further ticks must not keep re-randomizing
+    tick_for(controller, 1.5)
+    assert len(player.seeks_received()) == 1
+
+
 def test_pause_and_play_fan_out(stack):
     players = [
         EmulatedPlayer(length=3600, start_position=10),
@@ -172,3 +350,22 @@ def test_pause_and_play_fan_out(stack):
 
     controller.play()
     assert all(p.state == "playing" for p in players)
+
+
+def test_restart_playback_seeks_all_to_zero(stack):
+    players = [
+        EmulatedPlayer(length=3600, start_position=90),
+        EmulatedPlayer(length=3600, start_position=95),
+    ]
+    servers, controller = stack(players)
+
+    assert tick_until(controller, lambda: len(controller.devices) == 2)
+    controller.restart_playback()
+    for player in players:
+        assert any(c.startswith("seek 0") for c in player.seeks_received())
+        assert int(player.position()) < 2
+
+    snap = controller.status_snapshot()
+    assert snap["connected_devices"] == 2
+    assert snap["expected_devices"] == 2
+    assert snap["health"] in ("ok", "degraded")

@@ -1,0 +1,15 @@
+[Unit]
+Description=Blaufilter video agent (receive video + restart VLC)
+After=network-online.target NetworkManager.service
+Wants=network-online.target
+
+[Service]
+ExecStart=/opt/blaufilter/venv/bin/blaufilter-agent
+Restart=always
+RestartSec=3
+User=@USER@
+# Allow restarting the user's blaufilter-vlc unit
+Environment=XDG_RUNTIME_DIR=/run/user/@UID@
+
+[Install]
+WantedBy=multi-user.target
