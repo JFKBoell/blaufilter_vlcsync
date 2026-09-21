@@ -317,14 +317,23 @@ gespeicherten Netze auf; ein neues lässt sich mit SSID und Passwort
 eintragen. Gedacht ist das fürs Entwickeln: kurz in ein Netz mit
 Internetzugang wechseln, aktualisieren, zurückwechseln.
 
-Das ist der einzige Menüpunkt, mit dem man ein Gerät aus seinem eigenen Netz
-aussperren könnte — deshalb zwei Sicherungen:
+Beim Beitritt wird gefragt, wie lange er gelten soll:
 
-- **Scheitert der Beitritt**, aktiviert das Gerät von selbst wieder sein
-  Blaufilter-Profil.
-- **Nach jedem Neustart** ist das Gerät wieder im Blaufilter-WLAN: das
-  fremde Profil wird auf `autoconnect no` gesetzt. Im Zweifel hilft also ein
+- **Nur jetzt** — das fremde Profil bekommt `autoconnect no`. Nach jedem
+  Neustart ist das Gerät wieder im Blaufilter-WLAN; im Zweifel hilft also
   Stromkabel ziehen.
+- **Dauerhaft** — das fremde Profil bekommt `autoconnect yes` und eine höhere
+  Priorität als das Blaufilter-Profil. Das Gerät bevorzugt dieses Netz künftig
+  und geht nur dann ins Blaufilter-WLAN, wenn es nicht in Reichweite ist.
+  Praktisch für ein Entwicklungsgerät am Schreibtisch. **Auf dem Host bleiben
+  die Clients dabei ohne Verbindung**, solange das andere Netz erreichbar ist.
+
+Dauerhaft bevorzugte Netze sind in der Liste gekennzeichnet; „Zurück ins
+Blaufilter-WLAN" bietet an, die Bevorzugung wieder aufzuheben.
+
+Unabhängig davon gilt: **Scheitert der Beitritt** (falsches Passwort, Netz
+außer Reichweite), aktiviert das Gerät von selbst wieder sein
+Blaufilter-Profil.
 
 Solange der Host in einem fremden Netz hängt, ist das Blaufilter-WLAN weg —
 Clients und Web-UI sind dann nicht erreichbar. Die neue Adresse des Geräts

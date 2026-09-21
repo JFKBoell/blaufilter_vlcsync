@@ -224,40 +224,77 @@ blaufilter_profile() {  # the profile that returns this device to its own networ
     [[ $(cfg_get role host) == host ]] && echo blaufilter-ap || echo blaufilter
 }
 
-known_wifi_profiles() {  # every stored WiFi profile except our own
-    nmcli -t -f NAME,TYPE connection show 2>/dev/null \
-        | awk -F: '$2 ~ /wireless/ {print $1}' \
-        | grep -vxE 'blaufilter|blaufilter-ap' || true
+known_wifi_profiles() {  # emits "name:autoconnect" for every foreign WiFi profile
+    nmcli -t -f NAME,TYPE,AUTOCONNECT connection show 2>/dev/null \
+        | awk -F: '$2 ~ /wireless/ && $1 != "blaufilter" && $1 != "blaufilter-ap" {print $1 ":" $3}' \
+        || true
 }
 
-join_network() {  # profile-name
-    local profile=$1 home
+# Two profiles compete for the one radio, and without an explicit priority
+# NetworkManager decides by last-used — i.e. unpredictably. Giving the foreign
+# network the higher priority makes it deterministic: join it when it is in
+# range, otherwise fall back to the Blaufilter network.
+set_profile_persistence() {  # profile permanent(0|1)
+    if (( $2 )); then
+        nmcli connection modify "$1" connection.autoconnect yes \
+            connection.autoconnect-priority 10 >/dev/null 2>&1 || true
+    else
+        nmcli connection modify "$1" connection.autoconnect no \
+            connection.autoconnect-priority 0 >/dev/null 2>&1 || true
+    fi
+}
+
+join_network() {  # profile-name permanent(0|1)
+    local profile=$1 permanent=$2 home note
     home=$(blaufilter_profile)
-    nmcli connection modify "$profile" connection.autoconnect no >/dev/null 2>&1 || true
+    set_profile_persistence "$profile" "$permanent"
+    if (( permanent )); then
+        note="Dieses Netz wird künftig bevorzugt; das Blaufilter-WLAN kommt hoch, wenn es nicht in Reichweite ist."
+    else
+        note="Nach einem Neustart ist das Gerät wieder im Blaufilter-WLAN."
+    fi
 
     run_detached "Wechsel in das Netz '$profile'" bash -c '
-        profile=$1; home=$2
+        profile=$1; home=$2; note=$3
         echo "Verbinde mit $profile ..."
         if nmcli connection up "$profile"; then
             echo
             echo "Verbunden. Adresse dieses Geräts:"
             ip -4 -o addr show wlan0 | awk "{print \"  \" \$4}"
             echo
-            echo "Nach einem Neustart ist das Gerät wieder im Blaufilter-WLAN."
+            echo "$note"
         else
             echo
             echo "Beitritt fehlgeschlagen — zurück ins Blaufilter-WLAN."
             nmcli connection up "$home"
             exit 1
         fi
-    ' _ "$profile" "$home"
+    ' _ "$profile" "$home" "$note"
+}
+
+# Temporary or permanent? Prints 0/1, or nothing when cancelled.
+ask_permanence() {  # network-name
+    local mode extra=""
+    [[ $(cfg_get role host) == host ]] && \
+        extra="\n\nDieses Gerät ist der Host: solange es in einem fremden\nNetz hängt, finden die Clients es nicht."
+    mode=$(whiptail --title "$TITLE — Anderes Netz" --menu \
+        "Wie soll der Wechsel zu '$1' gelten?$extra" 17 74 2 \
+        "jetzt"     "Nur jetzt — nach einem Neustart wieder Blaufilter" \
+        "dauerhaft" "Dauerhaft — dieses Netz wird künftig bevorzugt" \
+        3>&1 1>&2 2>&3) || return 1
+    [[ $mode == dauerhaft ]] && echo 1 || echo 0
 }
 
 menu_wifi_join() {
-    local entries=() choice ssid psk profile scan=()
+    local entries=() choice ssid psk profile scan=() permanent name auto
 
-    while read -r p; do
-        [[ -n $p ]] && entries+=("$p" "gespeichertes Netz")
+    while IFS=: read -r name auto; do
+        [[ -n $name ]] || continue
+        if [[ $auto == yes ]]; then
+            entries+=("$name" "gespeichert — wird bevorzugt")
+        else
+            entries+=("$name" "gespeichert")
+        fi
     done < <(known_wifi_profiles)
     entries+=("NEU" "anderes Netz eintragen…")
 
@@ -266,8 +303,9 @@ menu_wifi_join() {
         "${entries[@]}" 3>&1 1>&2 2>&3) || return 0
 
     if [[ $choice != NEU ]]; then
-        yes_no "Jetzt in '$choice' wechseln?\n\nDie WLAN-Verbindung bricht dabei ab. Scheitert der\nBeitritt, kehrt das Gerät von selbst ins Blaufilter-WLAN\nzurück — ebenso bei jedem Neustart." 14 || return 0
-        join_network "$choice"
+        permanent=$(ask_permanence "$choice") || return 0
+        yes_no "Jetzt in '$choice' wechseln?\n\nDie WLAN-Verbindung bricht dabei ab. Scheitert der\nBeitritt, kehrt das Gerät von selbst ins Blaufilter-WLAN\nzurück.\n\n$( ((permanent)) && echo 'Dauerhaft: dieses Netz wird künftig bevorzugt.' || echo 'Nur jetzt: nach einem Neustart wieder Blaufilter.')" 16 || return 0
+        join_network "$choice" "$permanent"
         return 0
     fi
 
@@ -308,12 +346,26 @@ menu_wifi_join() {
         msg "Das Netzprofil konnte nicht angelegt werden."
         return 0
     fi
-    join_network "$profile"
+    permanent=$(ask_permanence "$ssid") || return 0
+    join_network "$profile" "$permanent"
 }
 
 menu_wifi_back() {
-    local home; home=$(blaufilter_profile)
+    local home preferred=() name auto p
+    home=$(blaufilter_profile)
     yes_no "Zurück ins Blaufilter-WLAN wechseln?\n\nProfil: $home" 10 || return 0
+
+    # A network joined permanently would win again at the next boot — offer to
+    # drop that preference, otherwise switching back only lasts until a reboot.
+    while IFS=: read -r name auto; do
+        [[ $auto == yes ]] && preferred+=("$name")
+    done < <(known_wifi_profiles)
+    if (( ${#preferred[@]} )); then
+        if yes_no "Diese Netze werden derzeit dauerhaft bevorzugt:\n\n  ${preferred[*]}\n\nBevorzugung aufheben, damit das Gerät auch nach einem\nNeustart im Blaufilter-WLAN bleibt?" 15; then
+            for p in "${preferred[@]}"; do set_profile_persistence "$p" 0; done
+        fi
+    fi
+
     run_detached "Zurück ins Blaufilter-WLAN" bash -c '
         nmcli connection up "$1"
         echo
