@@ -408,14 +408,13 @@ menu_splash() {
         "Bild, das beim Hochfahren angezeigt wird:" 20 78 10 \
         "${entries[@]}" 3>&1 1>&2 2>&3) || return 0
 
+    local confirmed=0
     if [[ $path == ORIGINAL ]]; then
         yes_no "Ursprüngliches Startbild wiederherstellen?\n\nWirkt ab dem nächsten Neustart." 10 || return 0
-        clear
-        echo "== Startbild wird zurückgesetzt, initramfs wird neu gebaut =="
-        cp "$SPLASH_TARGET.orig" "$SPLASH_TARGET"
-        command -v update-initramfs >/dev/null && update-initramfs -u
-        read -rp "Fertig. Enter drücken…" _
-        return 0
+        # Same step as for any other image — the backup is simply the source
+        # now, and it stays: the step only creates .orig when none exists yet.
+        path="$SPLASH_TARGET.orig"
+        confirmed=1
     fi
 
     if [[ $path == MANUELL ]]; then
@@ -424,14 +423,16 @@ menu_splash() {
     fi
     [[ -f $path ]] || { msg "Datei nicht gefunden:\n$path"; return 0; }
 
-    size=$(png_size "$path")
-    if [[ -z $size ]]; then
-        yes_no "Das scheint keine PNG-Datei zu sein:\n$path\n\nTrotzdem verwenden?" 11 || return 0
+    if (( ! confirmed )); then
+        size=$(png_size "$path")
+        if [[ -z $size ]]; then
+            yes_no "Das scheint keine PNG-Datei zu sein:\n$path\n\nTrotzdem verwenden?" 11 || return 0
+        fi
+        yes_no "Startbild ersetzen?\n\n$path\nAuflösung: ${size:-unbekannt}\n\nAm besten passt die native Auflösung des Displays;\nAbweichendes wird skaliert. Wirkt ab dem nächsten\nNeustart." 15 || return 0
     fi
-    yes_no "Startbild ersetzen?\n\n$path\nAuflösung: ${size:-unbekannt}\n\nAm besten passt die native Auflösung des Displays;\nAbweichendes wird skaliert. Wirkt ab dem nächsten\nNeustart." 15 || return 0
 
     clear
-    echo "== Startbild wird gesetzt, initramfs wird neu gebaut =="
+    echo "== Startbild wird gesetzt =="
     echo
     if BF_SPLASH="$path" bash "$repo/deploy/steps/50-splash.sh"; then
         echo; read -rp "Fertig — wirkt ab dem nächsten Neustart. Enter drücken…" _

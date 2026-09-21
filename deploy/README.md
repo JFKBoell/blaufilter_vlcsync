@@ -168,8 +168,15 @@ Im Verzeichnis `deploy/` liegen fertige Startbilder `Blaufilter_1.png` bis
 Geräte-ID passende vor.
 
 Das Original wird als `/usr/share/plymouth/themes/pix/splash.png.orig`
-gesichert — „Startbild ändern" im Wartungsmenü holt es auf Wunsch zurück
-(von Hand: zurückkopieren und `sudo update-initramfs -u`).
+gesichert — „Startbild ändern" im Wartungsmenü holt es auf Wunsch zurück.
+
+Plymouth liest das Bild aus dem Dateisystem, ein initramfs trägt nur eine
+Kopie. Raspberry Pi OS bootet ohne initramfs, sofern die `config.txt` keines
+anfordert — nur dann wird es überhaupt neu gebaut. Schlägt das fehl
+(`mkinitramfs: failed to determine device for /`), erscheint eine Warnung,
+**das Startbild ist aber trotzdem gesetzt**. Ursache ist dann meist
+`MODULES=dep` in `/etc/initramfs-tools/initramfs.conf`; auf `MODULES=most`
+umstellen und einmal `sudo update-initramfs -u` ausführen behebt es.
 
 ### Namensauflösung `blaufilter.local`
 
