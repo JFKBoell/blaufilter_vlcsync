@@ -47,6 +47,18 @@ cfg_set() {  # key value
 
 BF_USER=$(cfg_get user "${SUDO_USER:-pi}")
 
+# Which checkout this menu comes from. Shown in the header because "a menu
+# entry vanished" is otherwise indistinguishable from a bug — it usually means
+# the repository sits on a branch that does not carry that entry.
+repo_version() {
+    local repo branch commit
+    repo=$(cfg_get repo_dir "")
+    [[ -d $repo/.git ]] || { echo "unbekannt"; return; }
+    branch=$(git -C "$repo" rev-parse --abbrev-ref HEAD 2>/dev/null)
+    commit=$(git -C "$repo" rev-parse --short HEAD 2>/dev/null)
+    echo "${branch:-?} @ ${commit:-?}"
+}
+
 msg()  { whiptail --title "$TITLE" --msgbox "$1" "${2:-12}" 74; }
 yes_no() { whiptail --title "$TITLE" --yesno "$1" "${2:-12}" 74; }
 
@@ -84,6 +96,7 @@ status_report() {
     txp=$(iw dev wlan0 info 2>/dev/null | awk '/txpower/{print $2, $3}')
 
     report="Gerät ${id}  ·  Rolle: ${role}\n"
+    report+="Softwarestand: $(repo_version)\n"
     report+="WLAN '${ssid}' · Profil: ${wifi:-keins aktiv}\n"
     report+="IP: ${ip:-keine}   Sendeleistung: ${txp:-unbekannt}\n\n"
     report+="Dienste:\n"
@@ -804,7 +817,8 @@ menu_power() {
 # --------------------------------------------------------------------- main
 
 while true; do
-    header="Gerät $(cfg_get device_id '?') · $(cfg_get role '?') · $(ip -4 -o addr show wlan0 2>/dev/null | awk '{print $4}' | head -1)"
+    header="Gerät $(cfg_get device_id '?') · $(cfg_get role '?') · $(ip -4 -o addr show wlan0 2>/dev/null | awk '{print $4}' | head -1)
+Stand: $(repo_version)"
     choice=$(whiptail --title "$TITLE — Wartung" --menu "$header" 22 74 11 \
         "status"     "Status anzeigen" \
         "dienste"    "Dienste starten / stoppen / neu starten" \

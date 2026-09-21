@@ -281,6 +281,14 @@ am Bildschirm wie über SSH. Auf dem Desktop liegt dafür die Verknüpfung
 **„Blaufilter Einstellungen"** (auch im Startmenü unter *Einstellungen*);
 ein Doppelklick öffnet das Menü, ohne Terminal und ohne SSH.
 
+`/usr/local/sbin/blaufilter-setup` ist ein **Symlink auf
+`deploy/blaufilter-setup.sh` im Repository** — nach `git pull` oder
+`git checkout` ist also sofort die Fassung aktiv, die im Arbeitsverzeichnis
+steht. Welche das ist, zeigt das Menü in der Kopfzeile und im Status an
+(`Stand: <branch> @ <commit>`). Fehlt ein Menüpunkt, lohnt zuerst ein Blick
+dorthin: meist steht das Repository auf einem Zweig, der ihn noch nicht
+enthält.
+
 | Punkt | Zweck |
 |---|---|
 | **Status anzeigen** | Rolle, IP, Sendeleistung, Zustand aller Dienste; auf dem Host zusätzlich verbundene Geräte mit Drift und offene Hinweise |

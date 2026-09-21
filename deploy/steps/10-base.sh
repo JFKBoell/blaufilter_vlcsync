@@ -40,7 +40,11 @@ fi
 require_packages "${PACKAGES[@]}"
 
 echo "==> [10-base] Installing the setup/maintenance tool"
-install -m 755 "$BF_REPO_DIR/deploy/blaufilter-setup.sh" /usr/local/sbin/blaufilter-setup
+# Symlink, not a copy: a copy silently keeps running an old menu after a
+# git pull, and a re-install from an older checkout even downgrades it.
+# This way the tool is always exactly what the checkout says it is.
+ln -sfn "$BF_REPO_DIR/deploy/blaufilter-setup.sh" /usr/local/sbin/blaufilter-setup
+chmod 755 "$BF_REPO_DIR/deploy/blaufilter-setup.sh"
 
 echo "==> [10-base] Creating /opt/blaufilter"
 install -d /opt/blaufilter/video
