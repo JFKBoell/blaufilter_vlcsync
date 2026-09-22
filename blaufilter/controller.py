@@ -176,18 +176,30 @@ class Controller:
             self._drop_device(vlc_id)
 
     def _poll_positions(self):
-        now = time.time()
+        # Each device gets the timestamp of its own reply, taken at the middle
+        # of the round trip. Using one reading from before the loop made a
+        # device that answers slowly skew everything polled after it: their
+        # replies were dated back to the start of the loop, so their estimated
+        # position ran ahead by however long the slow device had taken. Over
+        # WiFi, where a retry costs a second, that showed up as drift spikes
+        # of about that size which vanished at the next clean reading.
         for vlc_id, device in list(self.devices.items()):
             try:
+                sent_at = time.time()
                 value = device.vlc.get_seek()
-                device.tracker.observe(now, value)
+                observed_at = (sent_at + time.time()) / 2
+                device.tracker.observe(observed_at, value)
                 device.conn_fail_count = 0
             except VlcConnectionError:
                 self._conn_fail(vlc_id, device)
                 continue
             if value is not None and value != device.last_seek_value:
                 device.last_seek_value = value
-                device.last_seek_change_at = now
+                device.last_seek_change_at = observed_at
+
+        # Extrapolated to one common instant, so the positions are comparable
+        now = time.time()
+        for device in self.devices.values():
             device.last_position = device.tracker.est_position(now, device.applied_rate)
 
     def _enforce_play_state(self):

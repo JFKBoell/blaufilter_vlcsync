@@ -278,7 +278,12 @@ das Web-UI läuft über einfaches HTTP im geschlossenen WLAN.
 - Der Controller pollt alle VLCs ~10× pro Sekunde über deren RC-Interface.
   Da VLC die Position nur in ganzen Sekunden meldet, wird der Sekundenwechsel
   abgepasst (Boundary-Sampling) und dazwischen mit der Abspielrate
-  extrapoliert → Messgenauigkeit ~±150 ms.
+  extrapoliert. Der Wechsel wird auf die **Mitte zwischen zwei Abfragen**
+  datiert — er kann irgendwo darin liegen —, und jede Antwort bekommt den
+  Zeitstempel ihres eigenen Umlaufs. Die Messgenauigkeit entspricht damit
+  etwa dem halben Abfrageabstand, im Normalbetrieb rund ±50–100 ms.
+  Antwortet ein Gerät wegen einer WLAN-Wiederholung verzögert, verschlechtert
+  sich **nur dessen** Genauigkeit, nicht die der anderen.
 - **Sanfte Korrektur (Standard):** Abweichungen von 0,15–3 s werden unsichtbar
   über eine temporär um 2–8 % verstellte Abspielrate ausgeglichen — kein
   Ruckeln, das Gerät „schwimmt" zurück auf die Master-Position.
