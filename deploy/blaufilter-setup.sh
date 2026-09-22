@@ -10,23 +10,19 @@
 # not tear the whole tool down mid-session. Every action checks its own result.
 set -u
 
-CONFIG=/etc/blaufilter/config
-VIDEO=/opt/blaufilter/video/main.mp4
-SPLASH_TARGET=/usr/share/plymouth/themes/pix/splash.png
+# The paths default to the real system but can be pointed elsewhere before
+# sourcing this file, which is how tests/shell exercises these functions
+# without a Raspberry Pi.
+CONFIG=${CONFIG:-/etc/blaufilter/config}
+VIDEO=${VIDEO:-/opt/blaufilter/video/main.mp4}
+SPLASH_TARGET=${SPLASH_TARGET:-/usr/share/plymouth/themes/pix/splash.png}
 TITLE="Blaufilter"
 
-BOOT_DIR=/boot/firmware
-[[ -d $BOOT_DIR ]] || BOOT_DIR=/boot
-CMDLINE="$BOOT_DIR/cmdline.txt"
-
-if [[ $EUID -ne 0 ]]; then
-    echo "Bitte mit sudo starten: sudo blaufilter-setup" >&2
-    exit 1
+if [[ -z ${BOOT_DIR:-} ]]; then
+    BOOT_DIR=/boot/firmware
+    [[ -d $BOOT_DIR ]] || BOOT_DIR=/boot
 fi
-if ! command -v whiptail >/dev/null; then
-    echo "whiptail fehlt (Paket 'whiptail')." >&2
-    exit 1
-fi
+CMDLINE=${CMDLINE:-$BOOT_DIR/cmdline.txt}
 
 # --------------------------------------------------------------- config i/o
 
@@ -36,12 +32,32 @@ cfg_get() {  # key [default]
     echo "${v:-${2-}}"
 }
 
+# Rewritten with awk rather than sed: in a sed replacement '&' stands for the
+# whole match and '\' escapes, so an SSID like "Cafe & Bar" used to corrupt the
+# line it was written to. The value is handed over through the environment so
+# awk does not interpret it either.
 cfg_set() {  # key value
-    [[ -f $CONFIG ]] || { install -d /etc/blaufilter; printf '[blaufilter]\n' > "$CONFIG"; }
-    if grep -qE "^[[:space:]]*$1[[:space:]]*=" "$CONFIG"; then
-        sed -i "s|^[[:space:]]*$1[[:space:]]*=.*|$1 = $2|" "$CONFIG"
+    [[ -f $CONFIG ]] || { install -d "$(dirname "$CONFIG")"; printf '[blaufilter]\n' > "$CONFIG"; }
+    local tmp
+    tmp=$(mktemp "$CONFIG.XXXXXX") || return 1
+    if CFG_KEY=$1 CFG_VALUE=$2 awk '
+        BEGIN { key = ENVIRON["CFG_KEY"]; value = ENVIRON["CFG_VALUE"]; written = 0 }
+        {
+            candidate = $0
+            sub(/[[:space:]]*=.*/, "", candidate)
+            gsub(/^[[:space:]]+|[[:space:]]+$/, "", candidate)
+            if ($0 ~ /=/ && candidate == key) {
+                if (!written) { print key " = " value; written = 1 }
+                next
+            }
+            print
+        }
+        END { if (!written) print key " = " value }
+    ' "$CONFIG" > "$tmp"; then
+        mv "$tmp" "$CONFIG"
     else
-        printf '%s = %s\n' "$1" "$2" >> "$CONFIG"
+        rm -f "$tmp"
+        return 1
     fi
 }
 
@@ -901,6 +917,71 @@ menu_logs() {
     whiptail --title "$unit" --scrolltext --msgbox "${text:-keine Einträge}" 24 78
 }
 
+# ----------------------------------------------------------------- update
+#
+# The first installation cannot come from this menu — on a fresh Pi the menu
+# does not exist yet, so install.sh stays the way in. Updating an installed
+# device is what happens over and over, and that belongs here: fetch, then let
+# the installer run with the settings already stored. For an update the full
+# run is the right thing, unlike for a role change.
+
+git_state() {  # repo -> "branch @ commit (N Commits hinterher)" or a note
+    local repo=$1 branch commit behind
+    [[ -d $repo/.git ]] || { echo "kein Git-Repository"; return; }
+    branch=$(git -C "$repo" rev-parse --abbrev-ref HEAD 2>/dev/null)
+    commit=$(git -C "$repo" rev-parse --short HEAD 2>/dev/null)
+    behind=$(git -C "$repo" rev-list --count "HEAD..@{upstream}" 2>/dev/null)
+    if [[ -n $behind && $behind != 0 ]]; then
+        echo "${branch:-?} @ ${commit:-?} — $behind neue Commits verfügbar"
+    else
+        echo "${branch:-?} @ ${commit:-?}"
+    fi
+}
+
+menu_update() {
+    local repo state dirty warn=""
+    repo=$(repo_path) || return 0
+    state=$(git_state "$repo")
+
+    if overlay_active; then
+        warn="\n\nACHTUNG: Der Schreibschutz ist aktiv — ein Update wäre nach\ndem nächsten Neustart wieder verschwunden. Erst dort\nausschalten und neu starten."
+    fi
+    dirty=$(git -C "$repo" status --porcelain 2>/dev/null | head -3)
+    if [[ -n $dirty ]]; then
+        warn+="\n\nHinweis: im Repository liegen lokale Änderungen."
+    fi
+
+    local choice
+    choice=$(whiptail --title "$TITLE — Aktualisieren" --menu \
+        "Stand: $state\nPfad: $repo$warn" 19 74 3 \
+        "beides" "Neuen Stand holen und einspielen" \
+        "holen"  "Nur neuen Stand holen (git pull)" \
+        "spielen" "Nur einspielen (ohne zu holen)" 3>&1 1>&2 2>&3) || return 0
+
+    if [[ $choice != spielen ]]; then
+        run_detached "Neuen Stand holen" git -C "$repo" pull --ff-only || {
+            msg "Das Holen ist fehlgeschlagen.\n\nBesteht eine Internetverbindung? Über WLAN → In ein\nanderes Netz wechseln kommt das Gerät kurzzeitig\nins Internet."
+            return 0
+        }
+        [[ $choice == holen ]] && return 0
+    fi
+
+    local psk args
+    psk=$(current_psk)
+    args=(--id "$(cfg_get device_id 1)" --role "$(cfg_get role host)"
+          --ssid "$(cfg_get ssid Blaufilter)" --user "$BF_USER"
+          --pin "$(cfg_get debug_pin 1234)")
+    if [[ $(cfg_get open_wifi 0) == 1 ]]; then
+        args+=(--open)
+    else
+        args+=(--psk "$psk")
+    fi
+    [[ -n $(cfg_get txpower "") ]] && args+=(--txpower "$(cfg_get txpower)")
+
+    yes_no "Jetzt einspielen?\n\nDas Installationsscript läuft mit den gespeicherten\nEinstellungen durch. Eigene Werte in der Konfiguration\nbleiben erhalten. Dauert einige Minuten, die Wiedergabe\nwird dabei neu gestartet." 16 || return 0
+    run_detached "Update wird eingespielt" bash "$repo/deploy/install.sh" "${args[@]}"
+}
+
 menu_power() {
     local choice
     choice=$(whiptail --title "$TITLE" --menu "Gerät:" 13 74 2 \
@@ -914,7 +995,18 @@ menu_power() {
 
 # --------------------------------------------------------------------- main
 
-while true; do
+main() {
+    if [[ $EUID -ne 0 ]]; then
+        echo "Bitte mit sudo starten: sudo blaufilter-setup" >&2
+        exit 1
+    fi
+    if ! command -v whiptail >/dev/null; then
+        echo "whiptail fehlt (Paket 'whiptail')." >&2
+        exit 1
+    fi
+
+    local header choice
+    while true; do
     header="Gerät $(cfg_get device_id '?') · $(cfg_get role '?') · $(ip -4 -o addr show wlan0 2>/dev/null | awk '{print $4}' | head -1)
 Stand: $(repo_version)$(overlay_active && echo '
 SCHREIBSCHUTZ AKTIV — Änderungen überleben keinen Neustart')"
@@ -929,6 +1021,7 @@ SCHREIBSCHUTZ AKTIV — Änderungen überleben keinen Neustart')"
         "pin"        "Debug-PIN ändern" \
         "video"      "Video dieses Geräts austauschen" \
         "splash"     "Startbild ändern" \
+        "update"     "Software aktualisieren" \
         "logs"       "Protokolle ansehen" \
         "power"      "Neu starten / Herunterfahren" \
         "ende"       "Beenden" 3>&1 1>&2 2>&3) || break
@@ -943,9 +1036,16 @@ SCHREIBSCHUTZ AKTIV — Änderungen überleben keinen Neustart')"
         pin)        menu_pin ;;
         video)      menu_video ;;
         splash)     menu_splash ;;
+        update)     menu_update ;;
         logs)       menu_logs ;;
         power)      menu_power ;;
         ende)       break ;;
     esac
-done
-clear
+    done
+    clear
+}
+
+# Sourcing this file (tests/shell does) must only define the functions.
+if [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then
+    main "$@"
+fi

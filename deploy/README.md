@@ -320,6 +320,7 @@ enthält.
 | **WLAN** | Eigenes WLAN ändern (SSID, offen/WPA2, Sendeleistung) — dauert Sekunden, da nur die Netzwerkeinstellungen neu geschrieben werden, Passwort auf Wunsch beibehalten. Außerdem: in ein anderes Netz wechseln und wieder zurück (siehe unten) |
 | **Bildschirmauflösung** | Auflösung und Bildwiederholrate fest einstellen oder wieder dem Bildschirm überlassen (siehe unten) |
 | **Schreibschutz** | Overlay-Dateisystem ein-/ausschalten, damit Stromausfall die SD-Karte nicht beschädigt (siehe unten) |
+| **Software aktualisieren** | Neuen Stand holen und einspielen — der übliche Weg für Updates (siehe unten) |
 | **Debug-PIN ändern** | PIN der Debug-Seite setzen oder Abfrage abschalten |
 | **Video austauschen** | Lokale Datei einsetzen (Verteilung auf alle Geräte macht das Web-UI) |
 | **Startbild ändern** | Mitgelieferte Bilder (`Blaufilter_<ID>.png`), eigene PNGs oder das ursprüngliche Startbild zurückholen; zeigt vorher die Auflösung an |
@@ -445,13 +446,41 @@ Zwei Punkte zur Pi-4-Hardware:
 
 ### Updates einspielen
 
-Auf jedem Gerät: `git pull` im Repo, dann das Install-Script **mit denselben
-Argumenten wie bei der Erstinstallation** erneut ausführen. Auf Geräten, die
-nur noch im Blaufilter-WLAN hängen (kein Internet), installiert das Script
-offline aus dem lokalen Repo — **neue Python-Abhängigkeiten können dabei
-nicht nachgeladen werden**. Bringt ein Update neue Abhängigkeiten mit (z. B.
-`waitress` für den Video-Agent), das Gerät vorübergehend per Ethernet oder
-anderem WLAN ans Internet hängen.
+Der übliche Weg ist **„Software aktualisieren"** im Wartungsmenü. Es zeigt den
+aktuellen Stand samt Zweig und Commit, holt auf Wunsch den neuen (`git pull`)
+und spielt ihn anschließend **mit den gespeicherten Einstellungen** ein —
+Geräte-ID, Rolle, WLAN und PIN müssen also nicht erneut eingetippt werden.
+Holen und Einspielen lassen sich auch getrennt auslösen.
+
+Drei Dinge, auf die das Menü selbst hinweist:
+
+- **Schreibschutz**: Ist er aktiv, wäre das Update nach dem nächsten Neustart
+  wieder weg. Erst ausschalten, neu starten, dann aktualisieren.
+- **Internet**: `git pull` braucht eine Verbindung. Über *WLAN → In ein
+  anderes Netz wechseln* kommt das Gerät kurzzeitig ins Internet.
+- **Neue Abhängigkeiten**: Auf Geräten ohne Internet installiert das Script
+  offline aus dem lokalen Repo — neue Python-Pakete lassen sich so allerdings
+  nicht nachladen.
+
+Die Erstinstallation läuft weiterhin über `setup.sh` bzw. `install.sh`: Auf
+einem frischen Pi gibt es das Menü ja noch nicht.
+
+## Tests
+
+```bash
+tests/shell/run.sh              # Deploy-Scripts und Wartungsmenü
+tests/shell/run.sh resolution   # nur passende Dateien
+pytest tests/                   # Controller, Web-API, Video-Verteilung
+```
+
+Die Shell-Tests brauchen weder einen Raspberry Pi noch Root-Rechte:
+`tests/shell/harness.sh` baut für jeden Lauf eine Wegwerf-Umgebung mit
+Konfigurationsdatei, Boot-Dateien, nachgebildetem Grafiktreiber und
+Attrappen für `nmcli`, `systemctl`, `raspi-config` und `whiptail`. Dialoge
+werden über eine Antwort-Warteschlange bedient, sodass sich ganze
+Menüabläufe durchspielen lassen — inklusive Abbruch. Gegen die echten
+Deploy-Schritte laufen ebenfalls Tests (Konfigurations-Zusammenführung,
+Startbild mit und ohne funktionierendes initramfs).
 
 ## Notausstieg: `blaufilter.txt` auf der Boot-Partition
 

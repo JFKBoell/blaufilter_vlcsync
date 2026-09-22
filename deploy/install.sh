@@ -71,39 +71,7 @@ fi
 
 echo "==> Blaufilter install: id=$BF_ID role=$BF_ROLE user=$BF_USER"
 
-echo "==> Writing /etc/blaufilter/config"
-install -d /etc/blaufilter
-# Settings this script owns. Everything else in the file — drift_threshold,
-# cooldown_s, random_start and friends, hand-tuned on the device — is carried
-# over, so running the installer again does not quietly reset them.
-BF_MANAGED_KEYS="device_id role debug_pin ssid open_wifi txpower repo_dir"
-BF_PRESERVED=""
-if [[ -f /etc/blaufilter/config ]]; then
-    BF_PRESERVED=$(awk -v keys="$BF_MANAGED_KEYS" '
-        BEGIN { split(keys, k, " "); for (i in k) managed[k[i]] = 1 }
-        /^[[:space:]]*[A-Za-z_][A-Za-z0-9_]*[[:space:]]*=/ {
-            key = $0
-            sub(/[[:space:]]*=.*/, "", key)
-            gsub(/^[[:space:]]+|[[:space:]]+$/, "", key)
-            if (!(key in managed)) print
-        }
-    ' /etc/blaufilter/config)
-    [[ -n "$BF_PRESERVED" ]] && echo "    keeping: $(echo "$BF_PRESERVED" | tr '\n' ' ')"
-fi
-
-# ssid/open_wifi/txpower/repo_dir are not read by the controller — they let the
-# setup tool re-run this installer with the settings already in use.
-{
-    echo "[blaufilter]"
-    echo "device_id = $BF_ID"
-    echo "role = $BF_ROLE"
-    echo "debug_pin = $BF_PIN"
-    echo "ssid = $BF_SSID"
-    echo "open_wifi = $BF_OPEN"
-    echo "txpower = $BF_TXPOWER"
-    echo "repo_dir = $BF_REPO_DIR"
-    [[ -n "$BF_PRESERVED" ]] && printf '%s\n' "$BF_PRESERVED"
-} > /etc/blaufilter/config
+bash "$SCRIPT_DIR/steps/05-config.sh"
 
 BOOT_DIR=/boot/firmware
 [[ -d "$BOOT_DIR" ]] || BOOT_DIR=/boot
