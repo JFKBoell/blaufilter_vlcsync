@@ -250,24 +250,55 @@ repo_path() {
     echo "$repo"
 }
 
-reinstall() {  # extra install.sh arguments
-    local repo; repo=$(repo_path) || return 1
-
-    local psk open txp args
+# Everything a role actually consists of. The rest of the installation —
+# packages, the Python package, VLC autostart, agent, firewall, splash — is
+# identical for both roles, so re-running the installer for this would only
+# cost minutes and restart playback for nothing. The network step for the new
+# role already removes what the old one left behind.
+apply_role() {  # id role
+    local id=$1 role=$2 repo step psk
+    repo=$(repo_path) || return 1
     psk=$(current_psk)
-    open=$(cfg_get open_wifi 0)
-    txp=$(cfg_get txpower "")
-    args=(--ssid "$(cfg_get ssid Blaufilter)" --user "$BF_USER" --pin "$(cfg_get debug_pin 1234)")
-    [[ $open == 1 ]] && args+=(--open) || args+=(--psk "$psk")
-    [[ -n $txp ]] && args+=(--txpower "$txp")
-    args+=("$@")
 
-    run_detached "Installationsscript läuft — das dauert einige Minuten" \
-        bash "$repo/deploy/install.sh" "${args[@]}"
+    # Without a key the network step would build a WPA2 profile that nothing
+    # can join — better to ask than to hand back a device that is off the air.
+    if [[ $(cfg_get open_wifi 0) != 1 && -z $psk ]]; then
+        psk=$(whiptail --title "$TITLE — WLAN-Passwort" --passwordbox \
+            "Das WLAN-Passwort ließ sich nicht aus den gespeicherten\nProfilen lesen. Bitte eingeben:" 12 74 3>&1 1>&2 2>&3) || return 1
+        if [[ ${#psk} -lt 8 ]]; then
+            msg "Das Passwort muss mindestens 8 Zeichen haben — abgebrochen."
+            return 1
+        fi
+    fi
+
+    # Written first: the network step and the controller read the new values
+    cfg_set device_id "$id"
+    cfg_set role "$role"
+
+    [[ $role == host ]] && step=20-network-host.sh || step=20-network-client.sh
+    export BF_REPO_DIR="$repo" BF_ID="$id" BF_ROLE="$role" BF_USER \
+           BF_SSID="$(cfg_get ssid Blaufilter)" BF_PSK="$psk" \
+           BF_OPEN="$(cfg_get open_wifi 0)"
+
+    run_detached "Rolle wird auf '$role' (Gerät $id) umgestellt" bash -c '
+        set -e
+        id=$1; role=$2; repo=$3; step=$4
+        echo "Rechnername: blaufilter-$id"
+        hostnamectl set-hostname "blaufilter-$id"
+        sed -i "s/^127\.0\.1\.1.*/127.0.1.1\tblaufilter-$id/" /etc/hosts || true
+        echo
+        bash "$repo/deploy/steps/$step"
+        if [ "$role" = host ]; then
+            echo
+            bash "$repo/deploy/steps/40-controller.sh"
+        fi
+        echo
+        echo "Fertig — Rolle: $role, Gerät $id"
+    ' _ "$id" "$role" "$repo" "$step"
 }
 
 menu_role() {
-    local role id
+    local role id detail
     role=$(whiptail --title "$TITLE — Rolle" --menu \
         "Rolle dieses Geräts.\n\nDer Host spannt das WLAN auf und steuert alle anderen.\nEs darf genau EINEN Host geben." 15 74 2 \
         "host"   "Host (Gerät 1, WLAN + Steuerung)" \
@@ -283,8 +314,13 @@ menu_role() {
         "Geräte-ID (bestimmt die feste IP).\nJede ID darf nur einmal vergeben sein." 16 74 6 \
         "${entries[@]}" 3>&1 1>&2 2>&3) || return 0
 
-    yes_no "Gerät als '$role' mit ID $id einrichten?\n\nDas Installationsscript läuft erneut durch und räumt\nEinstellungen der bisherigen Rolle auf. Dauert 1–2 Minuten." || return 0
-    reinstall --id "$id" --role "$role" || true
+    if [[ $role == host ]]; then
+        detail="Das Gerät spannt danach selbst das WLAN auf und startet\nden Controller."
+    else
+        detail="Das Gerät tritt danach dem WLAN des Hosts bei; Controller\nund AP-Profil werden entfernt."
+    fi
+    yes_no "Gerät als '$role' mit ID $id einrichten?\n\n$detail\n\nDauert wenige Sekunden. Die WLAN-Verbindung bricht dabei ab." 15 || return 0
+    apply_role "$id" "$role"
 }
 
 # ------------------------------------------------- joining a foreign network

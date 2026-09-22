@@ -320,12 +320,13 @@ enthält.
 | **Startbild ändern** | Mitgelieferte Bilder (`Blaufilter_<ID>.png`), eigene PNGs oder das ursprüngliche Startbild zurückholen; zeigt vorher die Auflösung an |
 | **Protokolle ansehen** | Journal von Controller, Agent, NetworkManager und VLC |
 
-**WLAN-Änderungen** betreffen nur die Netzwerkkonfiguration und sind in
-Sekunden erledigt; die Wiedergabe läuft weiter. Ein **Rollenwechsel** lässt
-dagegen das Installationsscript erneut durchlaufen (1–2 Minuten), weil dabei
-Dienste hinzukommen oder wegfallen und die Einstellungen der alten Rolle
-aufgeräumt werden müssen — auch ohne Internet, solange keine neuen Pakete
-gebraucht werden.
+**WLAN-Änderungen und Rollenwechsel** fassen nur an, was sich tatsächlich
+unterscheidet, und sind in Sekunden erledigt; die Wiedergabe läuft weiter.
+Beim Rollenwechsel sind das Rechnername, `/etc/blaufilter/config`, der
+passende Netzwerkschritt — der die Reste der alten Rolle mit entfernt — und
+beim Host zusätzlich der Controller. Pakete, Python-Paket, VLC-Autostart,
+Agent, Port-Sperre und Startbild sind für beide Rollen gleich und bleiben
+unangetastet.
 
 Beides läuft **abgekoppelt von der Sitzung**: Das Neukonfigurieren des WLAN
 kappt die Verbindung, über die man gerade arbeitet. Der Schritt wird trotzdem
