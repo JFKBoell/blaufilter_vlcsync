@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import errno
 import functools
 import hmac
 import os
@@ -114,9 +115,18 @@ def create_app(controller: Controller) -> Flask:
             bf_config.write_tuning(controller.tuning())
         except OSError as e:
             saved = False
-            note = (f"Übernommen, aber nicht gespeichert ({e.strerror or e}). "
-                    "Beim Neustart gelten wieder die alten Werte — bei aktivem "
-                    "Schreibschutz ist das zu erwarten.")
+            tail = " Beim Neustart gelten wieder die alten Werte."
+            if e.errno == errno.EROFS:
+                note = ("Übernommen, aber nicht gespeichert: das Dateisystem ist "
+                        "schreibgeschützt. Bei aktivem Schreibschutz ist das so "
+                        "gewollt." + tail)
+            elif e.errno in (errno.EACCES, errno.EPERM):
+                note = ("Übernommen, aber nicht gespeichert: keine Schreibrechte auf "
+                        f"{bf_config.TUNING_PATH}. Einmal „Software aktualisieren“ im "
+                        "Wartungsmenü ausführen — das legt das Verzeichnis mit den "
+                        "richtigen Rechten an." + tail)
+            else:
+                note = f"Übernommen, aber nicht gespeichert ({e.strerror or e})." + tail
         return jsonify({"ok": True, "tuning": applied, "saved": saved, "note": note})
 
     @app.post("/api/seek_random")

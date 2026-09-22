@@ -300,12 +300,14 @@ des Install-Scripts** — es schreibt nur die Schlüssel neu, die es selbst
 verwaltet (Geräte-ID, Rolle, PIN, WLAN-Angaben, Repository-Pfad).
 
 Die drei Werte der Driftkorrektur lassen sich außerdem im Web-UI ändern
-(Debug-Seite → *Driftkorrektur*). Sie landen dann in
-`/etc/blaufilter/tuning` — einer eigenen Datei, weil der Controller als
-normaler Benutzer läuft und die Installationskonfiguration nicht schreiben
-darf. Was dort steht, hat Vorrang vor `/etc/blaufilter/config`. Bei aktivem
-Schreibschutz greift die Änderung sofort, überlebt aber keinen Neustart —
-darauf weist die Oberfläche hin.
+(Debug-Seite → *Driftkorrektur*). Sie landen in
+`/opt/blaufilter/state/tuning` und haben Vorrang vor
+`/etc/blaufilter/config`. Der eigene Ort ist nötig, weil der Controller als
+normaler Benutzer läuft: `/etc/blaufilter` gehört root, und ein atomarer
+Schreibvorgang legt zuerst eine temporäre Datei **im Verzeichnis** an — dafür
+reicht es nicht, nur die Zieldatei zu übereignen. Bei aktivem Schreibschutz
+greift die Änderung sofort, überlebt aber keinen Neustart; darauf weist die
+Oberfläche hin.
 Ruckelt es trotzdem periodisch: prüfen, ob das Video mit kurzem
 Keyframe-Abstand (GOP ≤ 2 s) kodiert ist — Seeks landen sonst weit daneben
 und provozieren Folgekorrekturen.

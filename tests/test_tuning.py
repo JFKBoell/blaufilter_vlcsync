@@ -1,6 +1,9 @@
 """Drift-correction settings changed from the web UI."""
 from __future__ import annotations
 
+import errno
+import os
+
 import pytest
 
 from blaufilter import config as bf_config
@@ -77,14 +80,58 @@ def test_read_only_filesystem_still_applies_the_change(client, monkeypatch):
     http, controller, _ = client
 
     def refuse(*_args, **_kwargs):
-        raise OSError(30, "Read-only file system")
+        raise OSError(errno.EROFS, "Read-only file system")
 
     monkeypatch.setattr(bf_config, "write_tuning", refuse)
     body = http.post("/api/tuning", headers=PIN_HEADERS,
                      json={"drift_threshold": 2.0}).get_json()
     assert body["saved"] is False
-    assert "Schreibschutz" in body["note"]
+    assert "schreibgeschützt" in body["note"]
     assert controller.cfg.drift_threshold == 2.0, "muss trotzdem sofort gelten"
+
+
+def test_missing_permission_is_not_blamed_on_the_write_protection(client, monkeypatch):
+    """The first version told users the write protection was on whenever
+    saving failed — it was a permission problem on the directory."""
+    http, controller, _ = client
+
+    def refuse(*_args, **_kwargs):
+        raise OSError(errno.EACCES, "Permission denied")
+
+    monkeypatch.setattr(bf_config, "write_tuning", refuse)
+    body = http.post("/api/tuning", headers=PIN_HEADERS,
+                     json={"drift_threshold": 2.0}).get_json()
+    assert body["saved"] is False
+    assert "Schreibrechte" in body["note"]
+    assert "Schreibschutz" not in body["note"], "darf nicht den Schreibschutz beschuldigen"
+    assert controller.cfg.drift_threshold == 2.0
+
+
+@pytest.mark.skipif(os.geteuid() == 0,
+                    reason="root ignoriert Verzeichnisrechte — der Fall ist so nicht prüfbar")
+def test_writing_needs_a_writable_directory_not_just_the_file(tmp_path):
+    """The bug from the device: the file belonged to the service user, but the
+    directory did not — and an atomic write creates a temporary file in it."""
+    directory = tmp_path / "root-owned"
+    directory.mkdir()
+    target = directory / "tuning"
+    target.write_text("[blaufilter]\n")
+    target.chmod(0o666)      # die Datei selbst wäre beschreibbar
+    directory.chmod(0o555)   # das Verzeichnis nicht
+
+    try:
+        with pytest.raises(OSError):
+            bf_config.write_tuning({"drift_threshold": 1.0}, str(target))
+    finally:
+        directory.chmod(0o755)
+
+
+def test_writing_works_in_a_directory_the_service_user_owns(tmp_path):
+    state = tmp_path / "state"
+    target = state / "tuning"
+    bf_config.write_tuning({"drift_threshold": 1.25}, str(target))
+    assert bf_config.read_tuning(str(target))["drift_threshold"] == 1.25
+    assert not (state / "tuning.tmp").exists(), "keine Reste"
 
 
 def test_tuning_file_overrides_the_installed_config(tmp_path):

@@ -6,10 +6,14 @@ from dataclasses import dataclass, field
 from typing import List
 
 CONFIG_PATH = "/etc/blaufilter/config"
-TUNING_PATH = "/etc/blaufilter/tuning"
-"""Sync settings changed from the web UI. A separate file because the
-controller runs as the ordinary user and must not write the installer's
-config; values here win over the ones in CONFIG_PATH."""
+TUNING_PATH = "/opt/blaufilter/state/tuning"
+"""Sync settings changed from the web UI; values here win over CONFIG_PATH.
+
+Not in /etc/blaufilter: that directory belongs to root, and writing a file
+atomically means creating a temporary one next to it, which needs write
+permission on the *directory* — owning the file alone is not enough. This is
+runtime state written by the service user, so it lives under /opt/blaufilter
+in a directory the installer hands to that user."""
 DEFAULT_VIDEO_PATH = "/opt/blaufilter/video/main.mp4"
 
 RATE_MIN = 0.1

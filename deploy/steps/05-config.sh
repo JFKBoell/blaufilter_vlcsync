@@ -42,14 +42,7 @@ fi
     [[ -n $PRESERVED ]] && printf '%s\n' "$PRESERVED"
 } > "$CONFIG_PATH"
 
-# The web UI changes the drift-correction settings at runtime, but the
-# controller runs as the ordinary user and must not write the file above.
-# It gets its own, which it owns; values there win over the ones here.
-TUNING_PATH="$(dirname "$CONFIG_PATH")/tuning"
-if [[ ! -f $TUNING_PATH ]]; then
-    printf '[blaufilter]\n' > "$TUNING_PATH"
-fi
-if [[ -n ${BF_USER:-} ]] && id "$BF_USER" >/dev/null 2>&1; then
-    chown "$BF_USER" "$TUNING_PATH"
-fi
-chmod 644 "$TUNING_PATH"
+# Older installs put the runtime tuning file here, where the controller could
+# not actually write it (see blaufilter/config.py). It now lives under
+# /opt/blaufilter/state, created in 10-base.sh.
+rm -f "$(dirname "$CONFIG_PATH")/tuning"
