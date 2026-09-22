@@ -259,7 +259,10 @@ das Web-UI läuft über einfaches HTTP im geschlossenen WLAN.
   Ziel** bekommt nur dieses Gerät die Datei — so kann jedes Gerät ein eigenes
   Video zeigen. **Alle Videos müssen gleich lang sein**, sonst passt die
   Drift-Synchronisation nicht (das Status-Panel warnt bei abweichenden
-  Längen). Optional wird VLC nach dem Upload neu gestartet; das Gerät steigt
+  Längen). **Videos der Geräte prüfen** zeigt, welche Datei gerade auf
+  welchem Gerät liegt — die Kennung wird aus dem Inhalt berechnet (Größe plus
+  Prüfsumme über Anfang und Ende), gleiche Kennung heißt also gleiches Video,
+  unabhängig davon, wann es dorthin kopiert wurde. Optional wird VLC nach dem Upload neu gestartet; das Gerät steigt
   dann bei 0 ein und wird vom Controller auf die Master-Position gezogen.
   Große 4K-Dateien über 2,4‑GHz-WLAN können mehrere Minuten dauern; auf dem
   Host wird während des Uploads kurzzeitig etwa der doppelte Speicherplatz
@@ -287,7 +290,9 @@ das Web-UI läuft über einfaches HTTP im geschlossenen WLAN.
 
 Einstellbar in `/etc/blaufilter/config`: `drift_threshold`,
 `hysteresis_cycles`, `cooldown_s`, `rate_nudge`, `web_port`, `random_start`,
-`debug_pin`.
+`debug_pin`. Von Hand eingetragene Werte **überstehen ein erneutes Ausführen
+des Install-Scripts** — es schreibt nur die Schlüssel neu, die es selbst
+verwaltet (Geräte-ID, Rolle, PIN, WLAN-Angaben, Repository-Pfad).
 Ruckelt es trotzdem periodisch: prüfen, ob das Video mit kurzem
 Keyframe-Abstand (GOP ≤ 2 s) kodiert ist — Seeks landen sonst weit daneben
 und provozieren Folgekorrekturen.

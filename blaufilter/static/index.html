@@ -294,6 +294,9 @@
       </label>
       <button type="button" id="uploadbtn">Video verteilen</button>
     </div>
+    <div class="actions">
+      <button type="button" id="peersbtn">Videos der Geräte prüfen</button>
+    </div>
     <div id="videostatus"></div>
   </div>
 
@@ -313,6 +316,7 @@
   const healthlabel = document.getElementById('healthlabel');
   const issuesEl = document.getElementById('issues');
   const uploadbtn = document.getElementById('uploadbtn');
+  const peersbtn = document.getElementById('peersbtn');
   const videostatus = document.getElementById('videostatus');
   const mainview = document.getElementById('mainview');
   const debugview = document.getElementById('debugview');
@@ -588,6 +592,43 @@
   });
   document.getElementById('restart').addEventListener('click', () => {
     debugFetch('/api/restart_playback', { method: 'POST' }).then(poll);
+  });
+
+  peersbtn.addEventListener('click', async () => {
+    peersbtn.disabled = true;
+    videostatus.textContent = 'Frage die Geräte ab…';
+    try {
+      const r = await debugFetch('/api/video/peers');
+      const body = await r.json().catch(() => ({}));
+      if (!r.ok) {
+        videostatus.innerHTML = `<span class="fail">${body.error || 'Abfrage fehlgeschlagen'}</span>`;
+        return;
+      }
+      const rows = body.peers || [];
+      let html = '<div>Videos auf den Geräten</div>' +
+        '<div class="tablewrap"><table><thead><tr><th>Gerät</th><th>Größe</th>' +
+        '<th>Kennung</th></tr></thead><tbody>';
+      html += rows.map(p => {
+        if (!p.ok) {
+          return `<tr class="offline"><td>${p.id ?? '?'}</td><td colspan="2">nicht erreichbar</td></tr>`;
+        }
+        const v = p.video || {};
+        if (!v.present) {
+          return `<tr><td>${p.id ?? '?'}</td><td colspan="2" class="fail">kein Video</td></tr>`;
+        }
+        // Different videos per device are intentional, so an equal fingerprint
+        // is a note, not a verdict.
+        const mark = p.matches_host ? ' <span class="badge">= Host</span>' : '';
+        return `<tr><td>${p.id ?? '?'}</td><td>${fmtBytes(v.size_bytes)}</td>` +
+          `<td>${v.fingerprint || '—'}${mark}</td></tr>`;
+      }).join('');
+      html += '</tbody></table></div>';
+      videostatus.innerHTML = html;
+    } catch (e) {
+      videostatus.innerHTML = `<span class="fail">${e.message || e}</span>`;
+    } finally {
+      peersbtn.disabled = false;
+    }
   });
 
   uploadbtn.addEventListener('click', async () => {

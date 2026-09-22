@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import io
+import os
 import socket
 import threading
 import time
@@ -17,6 +18,47 @@ from blaufilter import video_ops
 from blaufilter.web import create_app
 
 PIN_HEADERS = {"X-Debug-Pin": BlaufilterConfig.debug_pin}
+
+
+def test_fingerprint_identifies_content_not_write_time(tmp_path):
+    """The same video pushed to several devices is written at different times.
+    A fingerprint that changed with the write time could never match across
+    devices — which is the whole point of comparing them."""
+    a = tmp_path / "a.mp4"
+    b = tmp_path / "b.mp4"
+    payload = b"MOOV-header" + b"x" * 5000 + b"tail"
+    a.write_bytes(payload)
+    b.write_bytes(payload)
+    os.utime(a, (1_000_000, 1_000_000))
+    os.utime(b, (2_000_000, 2_000_000))
+
+    fp_a = video_ops.video_info(str(a))["fingerprint"]
+    fp_b = video_ops.video_info(str(b))["fingerprint"]
+    assert fp_a and fp_a == fp_b
+
+
+def test_fingerprint_differs_for_different_videos_of_equal_size(tmp_path):
+    """Per-device videos have the same length, so equal file sizes are normal —
+    the fingerprint still has to tell them apart."""
+    a = tmp_path / "a.mp4"
+    b = tmp_path / "b.mp4"
+    a.write_bytes(b"AAAA-header" + b"x" * 5000 + b"endA")
+    b.write_bytes(b"BBBB-header" + b"x" * 5000 + b"endB")
+    assert a.stat().st_size == b.stat().st_size
+
+    assert video_ops.video_info(str(a))["fingerprint"] \
+        != video_ops.video_info(str(b))["fingerprint"]
+
+
+def test_fingerprint_follows_a_replaced_file(tmp_path):
+    """Cached by (size, mtime): swapping in a same-size video must still show."""
+    dest = tmp_path / "main.mp4"
+    dest.write_bytes(b"first-video-content")
+    before = video_ops.video_info(str(dest))["fingerprint"]
+
+    video_ops.atomic_replace_from_stream(str(dest), io.BytesIO(b"other-video-data"))
+    after = video_ops.video_info(str(dest))["fingerprint"]
+    assert before and after and before != after
 
 
 def test_atomic_replace_from_stream(tmp_path):
@@ -113,6 +155,10 @@ def test_distribute_to_local_agent(tmp_path):
     peers = probe_agent_videos(cfg)
     assert peers[0]["ok"] is True
     assert peers[0]["video"]["size_bytes"] == len(b"distributed-content")
+    # The point of the fingerprint: after a push the two devices report the
+    # same one, although the peer wrote its copy at a different moment.
+    assert peers[0]["video"]["fingerprint"] \
+        == video_ops.video_info(str(host_video))["fingerprint"]
 
 
 def test_distribute_skips_unreachable_candidates(tmp_path):
