@@ -249,6 +249,11 @@ das Web-UI läuft über einfaches HTTP im geschlossenen WLAN.
 - **Gerätetabelle** — zeigt pro Gerät Position und aktuellen Drift (grün
   < 250 ms, orange < 500 ms, rot darüber). Das Master-Gerät ist markiert.
   Offline-Kandidaten erscheinen grau.
+- **Driftkorrektur** — die drei Werte, die das Nachregeln steuern, direkt
+  einstellbar: Schwelle für einen Sprung, Anzahl der Zyklen über der Schwelle
+  und Mindestabstand zweier Sprünge. Änderungen gelten **sofort**, ohne
+  Neustart, und werden für den nächsten Start gespeichert. Werte außerhalb
+  des sinnvollen Bereichs werden auf die Grenze gesetzt und so zurückgemeldet.
 - **Jetzt neu synchronisieren** — erzwingt sofortigen Seek aller Geräte auf
   die Master-Position.
 - **Wiedergabe von vorn** — setzt alle Geräte auf Position 0.
@@ -293,6 +298,14 @@ Einstellbar in `/etc/blaufilter/config`: `drift_threshold`,
 `debug_pin`. Von Hand eingetragene Werte **überstehen ein erneutes Ausführen
 des Install-Scripts** — es schreibt nur die Schlüssel neu, die es selbst
 verwaltet (Geräte-ID, Rolle, PIN, WLAN-Angaben, Repository-Pfad).
+
+Die drei Werte der Driftkorrektur lassen sich außerdem im Web-UI ändern
+(Debug-Seite → *Driftkorrektur*). Sie landen dann in
+`/etc/blaufilter/tuning` — einer eigenen Datei, weil der Controller als
+normaler Benutzer läuft und die Installationskonfiguration nicht schreiben
+darf. Was dort steht, hat Vorrang vor `/etc/blaufilter/config`. Bei aktivem
+Schreibschutz greift die Änderung sofort, überlebt aber keinen Neustart —
+darauf weist die Oberfläche hin.
 Ruckelt es trotzdem periodisch: prüfen, ob das Video mit kurzem
 Keyframe-Abstand (GOP ≤ 2 s) kodiert ist — Seeks landen sonst weit daneben
 und provozieren Folgekorrekturen.

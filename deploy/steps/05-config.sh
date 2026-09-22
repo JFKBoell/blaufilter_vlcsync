@@ -41,3 +41,15 @@ fi
     echo "repo_dir = ${BF_REPO_DIR:-}"
     [[ -n $PRESERVED ]] && printf '%s\n' "$PRESERVED"
 } > "$CONFIG_PATH"
+
+# The web UI changes the drift-correction settings at runtime, but the
+# controller runs as the ordinary user and must not write the file above.
+# It gets its own, which it owns; values there win over the ones here.
+TUNING_PATH="$(dirname "$CONFIG_PATH")/tuning"
+if [[ ! -f $TUNING_PATH ]]; then
+    printf '[blaufilter]\n' > "$TUNING_PATH"
+fi
+if [[ -n ${BF_USER:-} ]] && id "$BF_USER" >/dev/null 2>&1; then
+    chown "$BF_USER" "$TUNING_PATH"
+fi
+chmod 644 "$TUNING_PATH"

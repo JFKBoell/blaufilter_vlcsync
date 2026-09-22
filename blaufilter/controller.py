@@ -13,7 +13,8 @@ from vlcsync.vlc import Vlc, VlcProcs
 from vlcsync.vlc_socket import VlcConnectionError
 from vlcsync.vlc_state import PlayState, VlcId
 
-from blaufilter.config import BlaufilterConfig, clamp_rate
+from blaufilter.config import (BlaufilterConfig, TUNING_LIMITS, clamp_rate,
+                               clamp_tuning)
 from blaufilter.tracker import PositionTracker, modular_diff
 from blaufilter import video_ops
 from blaufilter import distribute as video_distribute
@@ -379,6 +380,31 @@ class Controller:
         with self.lock:
             self._set_desired_play_state(PlayState.PAUSED)
 
+    def tuning(self) -> dict:
+        return {key: getattr(self.cfg, key) for key in TUNING_LIMITS}
+
+    def set_tuning(self, values: dict) -> dict:
+        """Apply new drift-correction settings to the running controller.
+
+        The tick loop reads these off cfg every pass, so they take effect at
+        once. Pending over-threshold counts and cooldowns are cleared, as they
+        were accumulated against the old thresholds and would otherwise cause
+        one correction judged by the settings that no longer apply.
+        """
+        with self.lock:
+            applied = {}
+            for key, raw in values.items():
+                if key not in TUNING_LIMITS:
+                    continue
+                applied[key] = clamp_tuning(key, raw)
+                setattr(self.cfg, key, applied[key])
+            if applied:
+                for device in self.devices.values():
+                    device.over_threshold_count = 0
+                    device.cooldown_until = 0.0
+                    device.seek_cooldown_s = 0.0
+            return applied
+
     def set_rate(self, rate: float) -> float:
         with self.lock:
             self.desired_rate = clamp_rate(rate)
@@ -712,6 +738,7 @@ class Controller:
                 "video": video,
                 "last_correction_at": last_correction_at,
                 "uptime_s": round(time.time() - self.started_at, 1),
+                "tuning": self.tuning(),
                 "video_busy": self._video_busy,
                 "last_video_job": self.last_video_job,
             }
