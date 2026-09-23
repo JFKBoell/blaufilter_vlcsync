@@ -29,6 +29,7 @@ class PositionTracker:
         self._boundary_time: Optional[float] = None
         self._boundary_value: Optional[int] = None
         self._last_seen: Optional[int] = None
+        self._last_seen_time: Optional[float] = None
 
     def observe(self, wallclock: float, get_time_value: Optional[int]):
         if get_time_value is None:
@@ -36,14 +37,21 @@ class PositionTracker:
             return
 
         last = self._last_seen
+        last_time = self._last_seen_time
         self._last_seen = get_time_value
+        self._last_seen_time = wallclock
 
         if last is None:
             return
 
         if get_time_value == last + 1:
-            # Clean single-second increment: position is exactly N.0 now
-            self._boundary_time = wallclock
+            # Clean single-second increment. The change happened somewhere
+            # between the previous poll and this one, so the middle of that
+            # window is the estimate: dating it at the poll itself would put
+            # the position systematically late by up to one poll interval,
+            # and by far more whenever a poll was delayed.
+            gap = 0.0 if last_time is None else max(0.0, wallclock - last_time)
+            self._boundary_time = wallclock - gap / 2
             self._boundary_value = get_time_value
         elif get_time_value != last:
             # Backward jump or gap (seek, loop wrap, stall): recalibrate
@@ -59,3 +67,4 @@ class PositionTracker:
         self._boundary_time = None
         self._boundary_value = None
         self._last_seen = None
+        self._last_seen_time = None

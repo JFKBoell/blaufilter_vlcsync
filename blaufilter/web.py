@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import errno
 import functools
 import hmac
 import os
@@ -7,6 +8,7 @@ import os
 from flask import Flask, jsonify, redirect, request, send_from_directory
 
 from blaufilter.controller import Controller
+from blaufilter import config as bf_config
 from blaufilter import distribute as video_distribute
 
 STATIC_DIR = os.path.join(os.path.dirname(__file__), "static")
@@ -90,6 +92,42 @@ def create_app(controller: Controller) -> Flask:
             return jsonify({"error": "body must be {\"rate\": <number>}"}), 400
         applied = controller.set_rate(requested)
         return jsonify({"ok": True, "rate": applied})
+
+    @app.get("/api/tuning")
+    def get_tuning():
+        return jsonify({"tuning": controller.tuning(), "limits": bf_config.TUNING_LIMITS})
+
+    @app.post("/api/tuning")
+    @require_pin
+    def set_tuning():
+        body = request.get_json(silent=True) or {}
+        try:
+            applied = controller.set_tuning(body)
+        except (TypeError, ValueError):
+            return jsonify({"error": "Werte müssen Zahlen sein"}), 400
+        if not applied:
+            return jsonify({"error": "keine gültigen Werte übergeben"}), 400
+
+        # Applied first, saved second: a read-only filesystem (write protection
+        # switched on) must not stop the change from taking effect now.
+        saved, note = True, ""
+        try:
+            bf_config.write_tuning(controller.tuning())
+        except OSError as e:
+            saved = False
+            tail = " Beim Neustart gelten wieder die alten Werte."
+            if e.errno == errno.EROFS:
+                note = ("Übernommen, aber nicht gespeichert: das Dateisystem ist "
+                        "schreibgeschützt. Bei aktivem Schreibschutz ist das so "
+                        "gewollt." + tail)
+            elif e.errno in (errno.EACCES, errno.EPERM):
+                note = ("Übernommen, aber nicht gespeichert: keine Schreibrechte auf "
+                        f"{bf_config.TUNING_PATH}. Einmal „Software aktualisieren“ im "
+                        "Wartungsmenü ausführen — das legt das Verzeichnis mit den "
+                        "richtigen Rechten an." + tail)
+            else:
+                note = f"Übernommen, aber nicht gespeichert ({e.strerror or e})." + tail
+        return jsonify({"ok": True, "tuning": applied, "saved": saved, "note": note})
 
     @app.post("/api/seek_random")
     def seek_random():

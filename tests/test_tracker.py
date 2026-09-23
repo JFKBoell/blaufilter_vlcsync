@@ -27,15 +27,17 @@ class TestPositionTracker:
         t = PositionTracker()
         t.observe(100.0, 42)
         t.observe(100.4, 42)
-        t.observe(100.7, 43)  # increment: position is exactly 43.0 at wallclock 100.7
-        assert t.est_position(101.2, 1.0) == pytest.approx(43.5)
+        # The value changed somewhere in (100.4, 100.7]; the middle of that
+        # window is the unbiased estimate, so 43.0 is placed at 100.55.
+        t.observe(100.7, 43)
+        assert t.est_position(101.2, 1.0) == pytest.approx(43.65)
 
     def test_extrapolation_respects_rate(self):
         t = PositionTracker()
         t.observe(100.0, 42)
-        t.observe(100.5, 43)
-        assert t.est_position(101.0, 2.0) == pytest.approx(44.0)
-        assert t.est_position(101.0, 0.5) == pytest.approx(43.25)
+        t.observe(100.5, 43)  # 43.0 fällt auf 100.25
+        assert t.est_position(101.0, 2.0) == pytest.approx(44.5)
+        assert t.est_position(101.0, 0.5) == pytest.approx(43.375)
 
     def test_gap_invalidates_calibration(self):
         t = PositionTracker()
@@ -57,8 +59,8 @@ class TestPositionTracker:
         t.observe(100.0, 42)
         t.observe(100.5, 43)
         t.observe(101.0, 1)
-        t.observe(101.5, 2)  # clean increment again
-        assert t.est_position(102.0, 1.0) == pytest.approx(2.5)
+        t.observe(101.5, 2)  # clean increment again: 2.0 fällt auf 101.25
+        assert t.est_position(102.0, 1.0) == pytest.approx(2.75)
 
     def test_none_value_resets(self):
         t = PositionTracker()

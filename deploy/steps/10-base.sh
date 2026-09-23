@@ -39,11 +39,32 @@ if [[ "${BF_ROLE:-}" == "host" ]]; then
 fi
 require_packages "${PACKAGES[@]}"
 
+echo "==> [10-base] Enabling SSH"
+# Devices end up mounted somewhere without a keyboard, so remote access is not
+# optional in practice. raspi-config is preferred because it also generates the
+# host keys (a fresh image ships without them and sshd then refuses to start).
+if command -v raspi-config >/dev/null 2>&1 && raspi-config nonint do_ssh 0; then
+    :
+else
+    ssh-keygen -A >/dev/null 2>&1 || true
+    systemctl enable --now ssh 2>/dev/null \
+        || systemctl enable --now sshd 2>/dev/null \
+        || echo "    (SSH konnte nicht aktiviert werden — ist openssh-server installiert?)" >&2
+fi
+
 echo "==> [10-base] Installing the setup/maintenance tool"
-install -m 755 "$BF_REPO_DIR/deploy/blaufilter-setup.sh" /usr/local/sbin/blaufilter-setup
+# Symlink, not a copy: a copy silently keeps running an old menu after a
+# git pull, and a re-install from an older checkout even downgrades it.
+# This way the tool is always exactly what the checkout says it is.
+ln -sfn "$BF_REPO_DIR/deploy/blaufilter-setup.sh" /usr/local/sbin/blaufilter-setup
+chmod 755 "$BF_REPO_DIR/deploy/blaufilter-setup.sh"
 
 echo "==> [10-base] Creating /opt/blaufilter"
 install -d /opt/blaufilter/video
+# Runtime state the controller writes itself (drift settings from the web UI).
+# The directory must belong to the service user: writing a file atomically
+# creates a temporary one beside it, which needs write access to the directory.
+install -d /opt/blaufilter/state
 
 if [[ ! -d /opt/blaufilter/venv ]]; then
     python3 -m venv /opt/blaufilter/venv
@@ -61,4 +82,4 @@ if [[ -n "${BF_VIDEO:-}" ]]; then
     echo "==> [10-base] Copying video to /opt/blaufilter/video/main.mp4"
     cp "$BF_VIDEO" /opt/blaufilter/video/main.mp4
 fi
-chown -R "$BF_USER:$BF_USER" /opt/blaufilter/video
+chown -R "$BF_USER:$BF_USER" /opt/blaufilter/video /opt/blaufilter/state

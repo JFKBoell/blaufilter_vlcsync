@@ -5,20 +5,24 @@
 # at NetworkManager here: the installer already knows how to clean up leftovers
 # (a cloned SD card carrying the host's AP profile, for instance), and one
 # code path means the two can never drift apart.
-set -euo pipefail
+# Deliberately no 'set -e' / 'pipefail': in an interactive menu a command that
+# legitimately finds nothing (a grep for a setting that is not there yet) must
+# not tear the whole tool down mid-session. Every action checks its own result.
+set -u
 
-CONFIG=/etc/blaufilter/config
-VIDEO=/opt/blaufilter/video/main.mp4
+# The paths default to the real system but can be pointed elsewhere before
+# sourcing this file, which is how tests/shell exercises these functions
+# without a Raspberry Pi.
+CONFIG=${CONFIG:-/etc/blaufilter/config}
+VIDEO=${VIDEO:-/opt/blaufilter/video/main.mp4}
+SPLASH_TARGET=${SPLASH_TARGET:-/usr/share/plymouth/themes/pix/splash.png}
 TITLE="Blaufilter"
 
-if [[ $EUID -ne 0 ]]; then
-    echo "Bitte mit sudo starten: sudo blaufilter-setup" >&2
-    exit 1
+if [[ -z ${BOOT_DIR:-} ]]; then
+    BOOT_DIR=/boot/firmware
+    [[ -d $BOOT_DIR ]] || BOOT_DIR=/boot
 fi
-if ! command -v whiptail >/dev/null; then
-    echo "whiptail fehlt (Paket 'whiptail')." >&2
-    exit 1
-fi
+CMDLINE=${CMDLINE:-$BOOT_DIR/cmdline.txt}
 
 # --------------------------------------------------------------- config i/o
 
@@ -28,16 +32,48 @@ cfg_get() {  # key [default]
     echo "${v:-${2-}}"
 }
 
+# Rewritten with awk rather than sed: in a sed replacement '&' stands for the
+# whole match and '\' escapes, so an SSID like "Cafe & Bar" used to corrupt the
+# line it was written to. The value is handed over through the environment so
+# awk does not interpret it either.
 cfg_set() {  # key value
-    [[ -f $CONFIG ]] || { install -d /etc/blaufilter; printf '[blaufilter]\n' > "$CONFIG"; }
-    if grep -qE "^[[:space:]]*$1[[:space:]]*=" "$CONFIG"; then
-        sed -i "s|^[[:space:]]*$1[[:space:]]*=.*|$1 = $2|" "$CONFIG"
+    [[ -f $CONFIG ]] || { install -d "$(dirname "$CONFIG")"; printf '[blaufilter]\n' > "$CONFIG"; }
+    local tmp
+    tmp=$(mktemp "$CONFIG.XXXXXX") || return 1
+    if CFG_KEY=$1 CFG_VALUE=$2 awk '
+        BEGIN { key = ENVIRON["CFG_KEY"]; value = ENVIRON["CFG_VALUE"]; written = 0 }
+        {
+            candidate = $0
+            sub(/[[:space:]]*=.*/, "", candidate)
+            gsub(/^[[:space:]]+|[[:space:]]+$/, "", candidate)
+            if ($0 ~ /=/ && candidate == key) {
+                if (!written) { print key " = " value; written = 1 }
+                next
+            }
+            print
+        }
+        END { if (!written) print key " = " value }
+    ' "$CONFIG" > "$tmp"; then
+        mv "$tmp" "$CONFIG"
     else
-        printf '%s = %s\n' "$1" "$2" >> "$CONFIG"
+        rm -f "$tmp"
+        return 1
     fi
 }
 
 BF_USER=$(cfg_get user "${SUDO_USER:-pi}")
+
+# Which checkout this menu comes from. Shown in the header because "a menu
+# entry vanished" is otherwise indistinguishable from a bug — it usually means
+# the repository sits on a branch that does not carry that entry.
+repo_version() {
+    local repo branch commit
+    repo=$(cfg_get repo_dir "")
+    [[ -d $repo/.git ]] || { echo "unbekannt"; return; }
+    branch=$(git -C "$repo" rev-parse --abbrev-ref HEAD 2>/dev/null)
+    commit=$(git -C "$repo" rev-parse --short HEAD 2>/dev/null)
+    echo "${branch:-?} @ ${commit:-?}"
+}
 
 msg()  { whiptail --title "$TITLE" --msgbox "$1" "${2:-12}" 74; }
 yes_no() { whiptail --title "$TITLE" --yesno "$1" "${2:-12}" 74; }
@@ -58,6 +94,67 @@ current_psk() {
     echo "$psk"
 }
 
+# ------------------------------------------------------- write protection
+#
+# Pulling the plug is how an installation gets switched off, and an SD card
+# loses whatever was still buffered. The overlay filesystem is the cure: the
+# root filesystem is mounted read-only and all writes go to RAM, so a power cut
+# can no longer corrupt anything. Everything written while it is active is gone
+# after a reboot, so it is turned off for maintenance and back on for the show.
+
+MOUNTS=${MOUNTS:-/proc/mounts}   # overridable so this can be tested
+
+overlay_active() {
+    grep -qE '^overlay[[:space:]]+/[[:space:]]+overlay' "$MOUNTS"
+}
+
+# The overlay needs a working initramfs, and Raspberry Pi OS ships a setting
+# that breaks building one (the same one that makes the splash step warn).
+initramfs_broken() {
+    grep -qE '^[[:space:]]*MODULES=dep' /etc/initramfs-tools/initramfs.conf 2>/dev/null
+}
+
+fix_initramfs_modules() {
+    local conf=/etc/initramfs-tools/initramfs.conf
+    cp "$conf" "$conf.bak" 2>/dev/null || true
+    sed -i 's/^[[:space:]]*MODULES=dep/MODULES=most/' "$conf"
+}
+
+menu_overlay() {
+    local state action
+    if overlay_active; then
+        state="aktiv — Änderungen gehen beim Neustart verloren"
+    else
+        state="aus — Änderungen werden auf die SD-Karte geschrieben"
+    fi
+
+    action=$(whiptail --title "$TITLE — Schreibschutz" --menu \
+        "Zustand: $state\n\nMit Schreibschutz landen alle Schreibvorgänge im\nArbeitsspeicher statt auf der SD-Karte. Stromausfall\nkann das System dann nicht mehr beschädigen — aber\nauch nichts bleibt erhalten.\n\nFür die Installation einschalten, zum Warten ausschalten." 21 74 2 \
+        "ein" "Schreibschutz einschalten (für den Betrieb)" \
+        "aus" "Schreibschutz ausschalten (zum Warten)" 3>&1 1>&2 2>&3) || return 0
+
+    if ! command -v raspi-config >/dev/null; then
+        msg "raspi-config ist nicht vorhanden.\n\nDer Schreibschutz lässt sich damit nicht umschalten."
+        return 0
+    fi
+
+    if [[ $action == ein ]]; then
+        if initramfs_broken; then
+            yes_no "Der Schreibschutz braucht ein funktionierendes initramfs.\nAuf diesem System steht MODULES=dep, womit der Bau\nfehlschlägt (dieselbe Ursache wie die Warnung beim\nStartbild).\n\nJetzt auf MODULES=most umstellen?" 16 || return 0
+            fix_initramfs_modules
+        fi
+        yes_no "Schreibschutz einschalten?\n\nAb dem nächsten Neustart gilt: Videos, Einstellungen und\nProtokolle überleben keinen Neustart mehr. Zum Ändern\nvon Dingen vorher hier wieder ausschalten." 15 || return 0
+        run_detached "Schreibschutz wird eingeschaltet" raspi-config nonint do_overlayfs 0
+    else
+        yes_no "Schreibschutz ausschalten?\n\nAb dem nächsten Neustart werden Änderungen wieder\ndauerhaft auf die SD-Karte geschrieben." 13 || return 0
+        run_detached "Schreibschutz wird ausgeschaltet" raspi-config nonint do_overlayfs 1
+    fi
+
+    if yes_no "Die Umstellung wirkt erst nach einem Neustart.\n\nJetzt neu starten?" 10; then
+        systemctl reboot
+    fi
+}
+
 # ------------------------------------------------------------------- status
 
 svc_state() {  # unit -> "aktiv" / "GESTOPPT" / "nicht installiert"
@@ -76,6 +173,8 @@ status_report() {
     txp=$(iw dev wlan0 info 2>/dev/null | awk '/txpower/{print $2, $3}')
 
     report="Gerät ${id}  ·  Rolle: ${role}\n"
+    report+="Softwarestand: $(repo_version)\n"
+    report+="Schreibschutz: $(overlay_active && echo 'AKTIV — Änderungen sind flüchtig' || echo 'aus')\n"
     report+="WLAN '${ssid}' · Profil: ${wifi:-keins aktiv}\n"
     report+="IP: ${ip:-keine}   Sendeleistung: ${txp:-unbekannt}\n\n"
     report+="Dienste:\n"
@@ -120,37 +219,102 @@ PY
 
 # ------------------------------------------------------------------ actions
 
-reinstall() {  # extra install.sh arguments
-    local repo; repo=$(cfg_get repo_dir "")
-    if [[ -z $repo || ! -x $repo/deploy/install.sh ]]; then
-        if ! repo=$(whiptail --title "$TITLE" --inputbox \
-              "Pfad zum blaufilter_vlcsync-Repository:" 10 74 "/home/$BF_USER/blaufilter_vlcsync" \
-              3>&1 1>&2 2>&3); then return 1; fi
-        [[ -x $repo/deploy/install.sh ]] || { msg "Kein install.sh unter:\n$repo"; return 1; }
-    fi
-
-    local psk open txp args
-    psk=$(current_psk)
-    open=$(cfg_get open_wifi 0)
-    txp=$(cfg_get txpower "")
-    args=(--ssid "$(cfg_get ssid Blaufilter)" --user "$BF_USER" --pin "$(cfg_get debug_pin 1234)")
-    [[ $open == 1 ]] && args+=(--open) || args+=(--psk "$psk")
-    [[ -n $txp ]] && args+=(--txpower "$txp")
-    args+=("$@")
+# Runs a command detached from this terminal and streams its log.
+#
+# Reconfiguring the AP drops the very SSH connection this menu may be running
+# over. Without setsid the step would die of SIGHUP — possibly between deleting
+# and recreating the WiFi profile, which would leave the device unreachable.
+# Detached it always runs to completion; reconnect and the log shows the result.
+run_detached() {  # headline command...
+    local headline=$1; shift
+    local log=/var/log/blaufilter-setup.log
+    : > "$log"
+    rm -f "$log.done"
 
     clear
-    echo "== Installer läuft: ${args[*]//$psk/******} =="
+    echo "== $headline =="
+    echo "   Läuft unabhängig von dieser Sitzung weiter (Protokoll: $log)"
     echo
-    if bash "$repo/deploy/install.sh" "${args[@]}"; then
-        echo; read -rp "Fertig. Enter drücken…" _
-        return 0
+    setsid --fork bash -c "$(printf '%q ' "$@") >>'$log' 2>&1; echo \$? >'$log.done'"
+
+    tail -n +1 -f "$log" 2>/dev/null &
+    local tailpid=$!
+    while [[ ! -f $log.done ]]; do sleep 1; done
+    sleep 1
+    kill "$tailpid" 2>/dev/null || true
+
+    local rc; rc=$(cat "$log.done" 2>/dev/null || echo 1)
+    echo
+    if [[ $rc == 0 ]]; then
+        read -rp "Fertig. Enter drücken…" _
+    else
+        read -rp "FEHLGESCHLAGEN (Code $rc) — Ausgabe oben prüfen. Enter drücken…" _
     fi
-    echo; read -rp "FEHLGESCHLAGEN — Ausgabe oben prüfen. Enter drücken…" _
-    return 1
+    return "$rc"
+}
+
+# Prints the repository path on stdout, asking for it if the config has none.
+repo_path() {
+    local repo; repo=$(cfg_get repo_dir "")
+    if [[ -z $repo || ! -x $repo/deploy/install.sh ]]; then
+        repo=$(whiptail --title "$TITLE" --inputbox \
+              "Pfad zum blaufilter_vlcsync-Repository:" 10 74 "/home/$BF_USER/blaufilter_vlcsync" \
+              3>&1 1>&2 2>&3) || return 1
+        [[ -x $repo/deploy/install.sh ]] || { msg "Kein install.sh unter:\n$repo"; return 1; }
+        cfg_set repo_dir "$repo"
+    fi
+    echo "$repo"
+}
+
+# Everything a role actually consists of. The rest of the installation —
+# packages, the Python package, VLC autostart, agent, firewall, splash — is
+# identical for both roles, so re-running the installer for this would only
+# cost minutes and restart playback for nothing. The network step for the new
+# role already removes what the old one left behind.
+apply_role() {  # id role
+    local id=$1 role=$2 repo step psk
+    repo=$(repo_path) || return 1
+    psk=$(current_psk)
+
+    # Without a key the network step would build a WPA2 profile that nothing
+    # can join — better to ask than to hand back a device that is off the air.
+    if [[ $(cfg_get open_wifi 0) != 1 && -z $psk ]]; then
+        psk=$(whiptail --title "$TITLE — WLAN-Passwort" --passwordbox \
+            "Das WLAN-Passwort ließ sich nicht aus den gespeicherten\nProfilen lesen. Bitte eingeben:" 12 74 3>&1 1>&2 2>&3) || return 1
+        if [[ ${#psk} -lt 8 ]]; then
+            msg "Das Passwort muss mindestens 8 Zeichen haben — abgebrochen."
+            return 1
+        fi
+    fi
+
+    # Written first: the network step and the controller read the new values
+    cfg_set device_id "$id"
+    cfg_set role "$role"
+
+    [[ $role == host ]] && step=20-network-host.sh || step=20-network-client.sh
+    export BF_REPO_DIR="$repo" BF_ID="$id" BF_ROLE="$role" BF_USER \
+           BF_SSID="$(cfg_get ssid Blaufilter)" BF_PSK="$psk" \
+           BF_OPEN="$(cfg_get open_wifi 0)"
+
+    run_detached "Rolle wird auf '$role' (Gerät $id) umgestellt" bash -c '
+        set -e
+        id=$1; role=$2; repo=$3; step=$4
+        echo "Rechnername: blaufilter-$id"
+        hostnamectl set-hostname "blaufilter-$id"
+        sed -i "s/^127\.0\.1\.1.*/127.0.1.1\tblaufilter-$id/" /etc/hosts || true
+        echo
+        bash "$repo/deploy/steps/$step"
+        if [ "$role" = host ]; then
+            echo
+            bash "$repo/deploy/steps/40-controller.sh"
+        fi
+        echo
+        echo "Fertig — Rolle: $role, Gerät $id"
+    ' _ "$id" "$role" "$repo" "$step"
 }
 
 menu_role() {
-    local role id
+    local role id detail
     role=$(whiptail --title "$TITLE — Rolle" --menu \
         "Rolle dieses Geräts.\n\nDer Host spannt das WLAN auf und steuert alle anderen.\nEs darf genau EINEN Host geben." 15 74 2 \
         "host"   "Host (Gerät 1, WLAN + Steuerung)" \
@@ -166,22 +330,230 @@ menu_role() {
         "Geräte-ID (bestimmt die feste IP).\nJede ID darf nur einmal vergeben sein." 16 74 6 \
         "${entries[@]}" 3>&1 1>&2 2>&3) || return 0
 
-    yes_no "Gerät als '$role' mit ID $id einrichten?\n\nDas Installationsscript läuft erneut durch und räumt\nEinstellungen der bisherigen Rolle auf. Dauert 1–2 Minuten." || return 0
-    reinstall --id "$id" --role "$role" || true
+    if [[ $role == host ]]; then
+        detail="Das Gerät spannt danach selbst das WLAN auf und startet\nden Controller."
+    else
+        detail="Das Gerät tritt danach dem WLAN des Hosts bei; Controller\nund AP-Profil werden entfernt."
+    fi
+    yes_no "Gerät als '$role' mit ID $id einrichten?\n\n$detail\n\nDauert wenige Sekunden. Die WLAN-Verbindung bricht dabei ab." 15 || return 0
+    apply_role "$id" "$role"
+}
+
+# ------------------------------------------------- joining a foreign network
+#
+# For development: hop onto a network with internet to pull updates, then come
+# back. Two safeguards, because this is the one action that can lock the device
+# out of its own network: a failed join immediately restores the Blaufilter
+# profile, and the foreign profile is set to autoconnect=no, so a reboot always
+# lands back in the Blaufilter network.
+
+blaufilter_profile() {  # the profile that returns this device to its own network
+    [[ $(cfg_get role host) == host ]] && echo blaufilter-ap || echo blaufilter
+}
+
+known_wifi_profiles() {  # emits "name:autoconnect" for every foreign WiFi profile
+    nmcli -t -f NAME,TYPE,AUTOCONNECT connection show 2>/dev/null \
+        | awk -F: '$2 ~ /wireless/ && $1 != "blaufilter" && $1 != "blaufilter-ap" {print $1 ":" $3}' \
+        || true
+}
+
+# Two profiles compete for the one radio, and without an explicit priority
+# NetworkManager decides by last-used — i.e. unpredictably. Giving the foreign
+# network the higher priority makes it deterministic: join it when it is in
+# range, otherwise fall back to the Blaufilter network.
+set_profile_persistence() {  # profile permanent(0|1)
+    if (( $2 )); then
+        nmcli connection modify "$1" connection.autoconnect yes \
+            connection.autoconnect-priority 10 >/dev/null 2>&1 || true
+    else
+        nmcli connection modify "$1" connection.autoconnect no \
+            connection.autoconnect-priority 0 >/dev/null 2>&1 || true
+    fi
+}
+
+join_network() {  # profile-name permanent(0|1)
+    local profile=$1 permanent=$2 home note
+    home=$(blaufilter_profile)
+    set_profile_persistence "$profile" "$permanent"
+    if (( permanent )); then
+        note="Dieses Netz wird künftig bevorzugt; das Blaufilter-WLAN kommt hoch, wenn es nicht in Reichweite ist."
+    else
+        note="Nach einem Neustart ist das Gerät wieder im Blaufilter-WLAN."
+    fi
+
+    run_detached "Wechsel in das Netz '$profile'" bash -c '
+        profile=$1; home=$2; note=$3
+        echo "Verbinde mit $profile ..."
+        if nmcli connection up "$profile"; then
+            echo
+            echo "Verbunden. Adresse dieses Geräts:"
+            ip -4 -o addr show wlan0 | awk "{print \"  \" \$4}"
+            echo
+            echo "$note"
+        else
+            echo
+            echo "Beitritt fehlgeschlagen — zurück ins Blaufilter-WLAN."
+            nmcli connection up "$home"
+            exit 1
+        fi
+    ' _ "$profile" "$home" "$note"
+}
+
+# Temporary or permanent? Prints 0/1, or nothing when cancelled.
+ask_permanence() {  # network-name
+    local mode extra=""
+    [[ $(cfg_get role host) == host ]] && \
+        extra="\n\nDieses Gerät ist der Host: solange es in einem fremden\nNetz hängt, finden die Clients es nicht."
+    mode=$(whiptail --title "$TITLE — Anderes Netz" --menu \
+        "Wie soll der Wechsel zu '$1' gelten?$extra" 17 74 2 \
+        "jetzt"     "Nur jetzt — nach einem Neustart wieder Blaufilter" \
+        "dauerhaft" "Dauerhaft — dieses Netz wird künftig bevorzugt" \
+        3>&1 1>&2 2>&3) || return 1
+    [[ $mode == dauerhaft ]] && echo 1 || echo 0
+}
+
+menu_wifi_join() {
+    local entries=() choice ssid psk profile scan=() permanent name auto
+
+    while IFS=: read -r name auto; do
+        [[ -n $name ]] || continue
+        if [[ $auto == yes ]]; then
+            entries+=("$name" "gespeichert — wird bevorzugt")
+        else
+            entries+=("$name" "gespeichert")
+        fi
+    done < <(known_wifi_profiles)
+    entries+=("NEU" "anderes Netz eintragen…")
+
+    choice=$(whiptail --title "$TITLE — Anderes Netz" --menu \
+        "In welches Netz wechseln?\n\nZum Aktualisieren über das Internet. Das Blaufilter-WLAN\nist währenddessen weg — Clients und Web-UI sind nicht\nerreichbar, bis dieses Gerät zurückwechselt." 19 74 7 \
+        "${entries[@]}" 3>&1 1>&2 2>&3) || return 0
+
+    if [[ $choice != NEU ]]; then
+        permanent=$(ask_permanence "$choice") || return 0
+        yes_no "Jetzt in '$choice' wechseln?\n\nDie WLAN-Verbindung bricht dabei ab. Scheitert der\nBeitritt, kehrt das Gerät von selbst ins Blaufilter-WLAN\nzurück.\n\n$( ((permanent)) && echo 'Dauerhaft: dieses Netz wird künftig bevorzugt.' || echo 'Nur jetzt: nach einem Neustart wieder Blaufilter.')" 16 || return 0
+        join_network "$choice" "$permanent"
+        return 0
+    fi
+
+    # In AP mode the radio usually cannot scan, so typing the name always works
+    while read -r s; do
+        [[ -n $s ]] && scan+=("$s" "gefunden")
+    done < <(nmcli -t -f SSID device wifi list --rescan yes 2>/dev/null \
+             | awk 'NF && !seen[$0]++' | head -12)
+
+    if (( ${#scan[@]} )); then
+        scan+=("MANUELL" "Namen selbst eintippen")
+        ssid=$(whiptail --title "$TITLE — Anderes Netz" --menu \
+            "Gefundene Netze:" 18 74 8 "${scan[@]}" 3>&1 1>&2 2>&3) || return 0
+    else
+        ssid=MANUELL
+    fi
+    if [[ $ssid == MANUELL ]]; then
+        ssid=$(whiptail --title "$TITLE — Anderes Netz" --inputbox \
+            "Name des Netzes (SSID):\n\nIm AP-Betrieb kann dieses Gerät meist nicht nach Netzen\nsuchen — der Name muss daher eingetippt werden." 13 74 \
+            3>&1 1>&2 2>&3) || return 0
+        [[ -n $ssid ]] || return 0
+    fi
+
+    psk=$(whiptail --title "$TITLE — Anderes Netz" --passwordbox \
+        "Passwort für '$ssid'\n(leer lassen, wenn das Netz offen ist):" 11 74 3>&1 1>&2 2>&3) || return 0
+
+    profile="dev-$ssid"
+    nmcli connection delete "$profile" >/dev/null 2>&1 || true
+    if [[ -n $psk ]]; then
+        nmcli connection add type wifi ifname wlan0 con-name "$profile" ssid "$ssid" \
+            wifi-sec.key-mgmt wpa-psk wifi-sec.psk "$psk" \
+            connection.autoconnect no >/dev/null 2>&1
+    else
+        nmcli connection add type wifi ifname wlan0 con-name "$profile" ssid "$ssid" \
+            connection.autoconnect no >/dev/null 2>&1
+    fi
+    if ! nmcli connection show "$profile" >/dev/null 2>&1; then
+        msg "Das Netzprofil konnte nicht angelegt werden."
+        return 0
+    fi
+    permanent=$(ask_permanence "$ssid") || return 0
+    join_network "$profile" "$permanent"
+}
+
+menu_wifi_back() {
+    local home preferred=() name auto p
+    home=$(blaufilter_profile)
+    yes_no "Zurück ins Blaufilter-WLAN wechseln?\n\nProfil: $home" 10 || return 0
+
+    # A network joined permanently would win again at the next boot — offer to
+    # drop that preference, otherwise switching back only lasts until a reboot.
+    while IFS=: read -r name auto; do
+        [[ $auto == yes ]] && preferred+=("$name")
+    done < <(known_wifi_profiles)
+    if (( ${#preferred[@]} )); then
+        if yes_no "Diese Netze werden derzeit dauerhaft bevorzugt:\n\n  ${preferred[*]}\n\nBevorzugung aufheben, damit das Gerät auch nach einem\nNeustart im Blaufilter-WLAN bleibt?" 15; then
+            for p in "${preferred[@]}"; do set_profile_persistence "$p" 0; done
+        fi
+    fi
+
+    run_detached "Zurück ins Blaufilter-WLAN" bash -c '
+        nmcli connection up "$1"
+        echo
+        ip -4 -o addr show wlan0 | awk "{print \"  \" \$4}"
+    ' _ "$home"
+}
+
+apply_txpower() {  # repo value ("" = back to the driver maximum)
+    local repo=$1 txp=$2
+    if [[ -n $txp ]]; then
+        BF_TXPOWER="$txp" bash "$repo/deploy/steps/26-txpower.sh" >/dev/null 2>&1 \
+            || msg "Die Sendeleistung konnte nicht gesetzt werden."
+    else
+        rm -f /etc/NetworkManager/dispatcher.d/50-blaufilter-txpower
+        iw dev wlan0 set txpower auto >/dev/null 2>&1 || true
+    fi
 }
 
 menu_wifi() {
-    local ssid open psk txp
+    local choice active
+    active=$(nmcli -t -f NAME,DEVICE connection show --active 2>/dev/null \
+             | awk -F: '$2=="wlan0"{print $1}' | head -1)
+    choice=$(whiptail --title "$TITLE — WLAN" --menu \
+        "Aktives Profil: ${active:-keins}" 15 74 3 \
+        "ap"     "Eigenes WLAN einrichten (SSID, Passwort, Leistung)" \
+        "join"   "In ein anderes Netz wechseln (Entwicklung)" \
+        "zurueck" "Zurück ins Blaufilter-WLAN" 3>&1 1>&2 2>&3) || return 0
+    case $choice in
+        ap)      menu_wifi_ap ;;
+        join)    menu_wifi_join ;;
+        zurueck) menu_wifi_back ;;
+    esac
+}
+
+# Only the network step runs here — not the whole installer. Changing an SSID
+# has no business reinstalling packages, systemd units and the Python package.
+# (A role change does go through the installer: that one really does rearrange
+# the whole device.)
+menu_wifi_ap() {
+    local repo role id ssid open psk txp step
+    repo=$(repo_path) || return 0
+    role=$(cfg_get role host)
+    id=$(cfg_get device_id 1)
+
     ssid=$(whiptail --title "$TITLE — WLAN" --inputbox "Netzwerkname (SSID):" 10 74 \
            "$(cfg_get ssid Blaufilter)" 3>&1 1>&2 2>&3) || return 0
 
     if yes_no "WLAN ohne Passwort betreiben?\n\nJa  = offen, Besucher verbinden sich mit einem Tipp.\nNein = WPA2 mit Passwort.\n\nDie Steuerports der Geräte sind in beiden Fällen\ndurch die Port-Sperre geschützt." 14; then
         open=1
+        psk=""
     else
         open=0
-        psk=$(whiptail --title "$TITLE — WLAN" --passwordbox \
-              "WLAN-Passwort (mindestens 8 Zeichen):" 10 74 3>&1 1>&2 2>&3) || return 0
-        if [[ ${#psk} -lt 8 ]]; then msg "Das Passwort muss mindestens 8 Zeichen haben."; return 0; fi
+        psk=$(current_psk)
+        if [[ -z $psk ]] || yes_no "Passwort ändern?\n\nNein = bisheriges Passwort beibehalten." 10; then
+            while true; do
+                psk=$(whiptail --title "$TITLE — WLAN" --passwordbox \
+                      "WLAN-Passwort (mindestens 8 Zeichen):" 10 74 3>&1 1>&2 2>&3) || return 0
+                [[ ${#psk} -ge 8 ]] && break
+                msg "Das Passwort muss mindestens 8 Zeichen haben."
+            done
+        fi
     fi
 
     txp=$(whiptail --title "$TITLE — Sendeleistung" --menu \
@@ -191,14 +563,16 @@ menu_wifi() {
         "10" "10 dBm — ein Raum (empfohlen)" \
         "6"  "6 dBm — sehr dicht beieinander" 3>&1 1>&2 2>&3) || return 0
 
-    yes_no "WLAN neu einrichten?\n\nSSID: $ssid\nVerschlüsselung: $([[ $open == 1 ]] && echo 'offen' || echo 'WPA2')\nSendeleistung: ${txp:-unverändert}\n\nACHTUNG: Alle anderen Geräte müssen mit denselben\nEinstellungen neu eingerichtet werden, sonst finden\nsie den Host nicht mehr." 16 || return 0
+    yes_no "WLAN jetzt neu einrichten?\n\nSSID: $ssid\nVerschlüsselung: $([[ $open == 1 ]] && echo 'offen' || echo 'WPA2')\nSendeleistung: ${txp:-unverändert}\n\nDie WLAN-Verbindung bricht dabei kurz ab. Alle anderen\nGeräte müssen dieselben Einstellungen bekommen, sonst\nfinden sie den Host nicht mehr." 17 || return 0
 
     cfg_set ssid "$ssid"
     cfg_set open_wifi "$open"
     cfg_set txpower "$txp"
-    local args=(--id "$(cfg_get device_id 1)" --role "$(cfg_get role host)")
-    [[ $open == 1 ]] || args+=(--psk "$psk")
-    reinstall "${args[@]}" || true
+
+    [[ $role == host ]] && step=20-network-host.sh || step=20-network-client.sh
+    export BF_REPO_DIR="$repo" BF_ID="$id" BF_SSID="$ssid" BF_PSK="$psk" BF_OPEN="$open"
+    run_detached "WLAN wird neu eingerichtet" bash "$repo/deploy/steps/$step" || return 0
+    apply_txpower "$repo" "$txp"
 }
 
 menu_pin() {
@@ -215,29 +589,68 @@ menu_pin() {
     msg "PIN gespeichert.${pin:+\n\nNeue PIN: $pin}"
 }
 
+# VLC is a --user unit, the rest are system units
+svc_action() {  # service action
+    case $1 in
+        vlc) user_systemctl "$2" blaufilter-vlc ;;
+        *)   systemctl "$2" "blaufilter-$1" ;;
+    esac
+}
+
+svc_label() {
+    case $1 in
+        vlc)        echo "Videowiedergabe (VLC)" ;;
+        agent)      echo "Video-Agent" ;;
+        controller) echo "Controller + Web-UI" ;;
+        firewall)   echo "Port-Sperre" ;;
+    esac
+}
+
+# What the user loses while a given service is stopped
+stop_warning() {
+    case $1 in
+        vlc)        echo "Die Wiedergabe endet auf diesem Gerät." ;;
+        agent)      echo "Dieses Gerät nimmt keine Videos mehr entgegen." ;;
+        controller) echo "Web-UI und Synchronisation fallen aus — die Geräte\nspielen weiter, driften aber unkorrigiert auseinander." ;;
+        firewall)   echo "Die Steuerports 4212/4213 stehen dann allen im WLAN offen." ;;
+        alle)       echo "Wiedergabe, Steuerung und Port-Sperre werden beendet." ;;
+    esac
+}
+
 menu_services() {
-    local choice
-    choice=$(whiptail --title "$TITLE — Dienste" --menu "Neu starten:" 17 74 6 \
-        "vlc"        "Videowiedergabe (VLC)" \
-        "agent"      "Video-Agent" \
-        "controller" "Controller + Web-UI (nur Host)" \
-        "firewall"   "Port-Sperre" \
+    local svc action verb services out
+    svc=$(whiptail --title "$TITLE — Dienste" --menu "Welcher Dienst?" 17 74 5 \
+        "vlc"        "$(svc_label vlc)" \
+        "agent"      "$(svc_label agent)" \
+        "controller" "$(svc_label controller) (nur Host)" \
+        "firewall"   "$(svc_label firewall)" \
         "alle"       "alle oben genannten" 3>&1 1>&2 2>&3) || return 0
 
-    local out=""
-    restart_one() {
-        case $1 in
-            vlc) user_systemctl restart blaufilter-vlc 2>&1 ;;
-            *)   systemctl restart "blaufilter-$1" 2>&1 ;;
-        esac
-    }
-    if [[ $choice == alle ]]; then
-        for s in vlc agent controller firewall; do
-            out+="$s: $(restart_one "$s" >/dev/null 2>&1 && echo ok || echo 'fehlgeschlagen/nicht vorhanden')\n"
-        done
-    else
-        out="$choice: $(restart_one "$choice" >/dev/null 2>&1 && echo ok || echo 'fehlgeschlagen/nicht vorhanden')\n"
+    action=$(whiptail --title "$TITLE — Dienste" --menu \
+        "Aktion für: $([[ $svc == alle ]] && echo 'alle Dienste' || svc_label "$svc")" 14 74 3 \
+        "restart" "Neu starten" \
+        "stop"    "Stoppen" \
+        "start"   "Starten" 3>&1 1>&2 2>&3) || return 0
+
+    if [[ $action == stop ]]; then
+        yes_no "Wirklich stoppen?\n\n$(stop_warning "$svc")\n\nNach einem Neustart des Geräts laufen die Dienste\nwieder von selbst." 14 || return 0
     fi
+
+    [[ $svc == alle ]] && services=(vlc agent controller firewall) || services=("$svc")
+    case $action in
+        start) verb="gestartet" ;;
+        stop)  verb="gestoppt" ;;
+        *)     verb="neu gestartet" ;;
+    esac
+
+    out=""
+    for s in "${services[@]}"; do
+        if svc_action "$s" "$action" >/dev/null 2>&1; then
+            out+="$(svc_label "$s"): $verb\n"
+        else
+            out+="$(svc_label "$s"): fehlgeschlagen / nicht vorhanden\n"
+        fi
+    done
     msg "$out"
 }
 
@@ -265,6 +678,229 @@ menu_video() {
     msg "Video ersetzt und VLC neu gestartet."
 }
 
+png_size() {  # path -> "1920x1080", empty if not a readable PNG
+    python3 - "$1" <<'PY' 2>/dev/null
+import struct, sys
+with open(sys.argv[1], "rb") as fh:
+    head = fh.read(24)
+if head[:8] == b"\x89PNG\r\n\x1a\n":
+    print("%dx%d" % struct.unpack(">II", head[16:24]))
+PY
+}
+
+menu_splash() {
+    local repo id entries=() path size
+    repo=$(repo_path) || return 0
+    id=$(cfg_get device_id "")
+
+    # The repository's own images first, the one matching this device on top
+    if [[ -n $id && -f $repo/deploy/Blaufilter_$id.png ]]; then
+        entries+=("$repo/deploy/Blaufilter_$id.png" "aus dem Repository — für Gerät $id")
+    fi
+    for f in "$repo"/deploy/Blaufilter_*.png; do
+        [[ -f $f ]] || continue
+        [[ -n $id && $f == "$repo/deploy/Blaufilter_$id.png" ]] && continue
+        entries+=("$f" "aus dem Repository")
+    done
+    while IFS= read -r f; do
+        entries+=("$f" "$(du -h "$f" 2>/dev/null | cut -f1)")
+    done < <(find /home /media /mnt -maxdepth 4 -type f -iname '*.png' 2>/dev/null | head -15)
+    entries+=("MANUELL" "Pfad selbst eingeben")
+    [[ -f $SPLASH_TARGET.orig ]] && entries+=("ORIGINAL" "Ursprüngliches Startbild wiederherstellen")
+
+    path=$(whiptail --title "$TITLE — Startbild" --menu \
+        "Bild, das beim Hochfahren angezeigt wird:" 20 78 10 \
+        "${entries[@]}" 3>&1 1>&2 2>&3) || return 0
+
+    local confirmed=0
+    if [[ $path == ORIGINAL ]]; then
+        yes_no "Ursprüngliches Startbild wiederherstellen?\n\nWirkt ab dem nächsten Neustart." 10 || return 0
+        # Same step as for any other image — the backup is simply the source
+        # now, and it stays: the step only creates .orig when none exists yet.
+        path="$SPLASH_TARGET.orig"
+        confirmed=1
+    fi
+
+    if [[ $path == MANUELL ]]; then
+        path=$(whiptail --title "$TITLE — Startbild" --inputbox "Pfad zur PNG-Datei:" 10 74 \
+               "/home/$BF_USER/" 3>&1 1>&2 2>&3) || return 0
+    fi
+    [[ -f $path ]] || { msg "Datei nicht gefunden:\n$path"; return 0; }
+
+    if (( ! confirmed )); then
+        size=$(png_size "$path")
+        if [[ -z $size ]]; then
+            yes_no "Das scheint keine PNG-Datei zu sein:\n$path\n\nTrotzdem verwenden?" 11 || return 0
+        fi
+        yes_no "Startbild ersetzen?\n\n$path\nAuflösung: ${size:-unbekannt}\n\nAm besten passt die native Auflösung des Displays;\nAbweichendes wird skaliert. Wirkt ab dem nächsten\nNeustart." 15 || return 0
+    fi
+
+    clear
+    echo "== Startbild wird gesetzt =="
+    echo
+    if BF_SPLASH="$path" bash "$repo/deploy/steps/50-splash.sh"; then
+        echo; read -rp "Fertig — wirkt ab dem nächsten Neustart. Enter drücken…" _
+    else
+        echo; read -rp "FEHLGESCHLAGEN — Ausgabe oben prüfen. Enter drücken…" _
+    fi
+}
+
+# ------------------------------------------------------------- resolution
+#
+# The screen mode is pinned through the kernel's video= parameter rather than a
+# desktop tool: it is read from /sys (no graphical session needed, so this also
+# works over SSH) and applies to console, boot splash and desktop alike.
+
+DRM_ROOT=${DRM_ROOT:-/sys/class/drm}   # overridable so this can be tested
+
+drm_dir_for() {  # connector name -> <DRM_ROOT>/cardX-<connector>
+    local d
+    for d in "$DRM_ROOT"/card*-*; do
+        [[ -d $d && ${d##*/} == *-"$1" ]] && { echo "$d"; return 0; }
+    done
+    return 1
+}
+
+connected_outputs() {
+    local d name
+    for d in "$DRM_ROOT"/card*-*; do
+        [[ -r $d/status ]] || continue
+        [[ $(cat "$d/status") == connected ]] || continue
+        name=${d##*/}
+        echo "${name#*-}"
+    done
+}
+
+mode_label() {
+    case $1 in
+        3840x2160) echo "4K UHD" ;;
+        2560x1440) echo "WQHD" ;;
+        1920x1080) echo "Full HD" ;;
+        1280x720)  echo "HD" ;;
+        *)         echo "—" ;;
+    esac
+}
+
+current_video_setting() {  # connector -> "1920x1080@60" or empty
+    grep -oE "video=$1:[^[:space:]]+" "$CMDLINE" 2>/dev/null | head -1 | cut -d: -f2- || true
+}
+
+set_video_setting() {  # connector value ("" = remove, back to automatic)
+    local conn=$1 value=$2 line
+    line=$(tr '\n' ' ' < "$CMDLINE")
+    line=$(sed -E "s/[[:space:]]*video=${conn}:[^[:space:]]+//g" <<<"$line")
+    [[ -n $value ]] && line="$line video=${conn}:${value}"
+    line=$(tr -s ' ' <<<"$line" | sed 's/^ *//; s/ *$//')
+
+    # A broken cmdline.txt means the Pi does not boot at all — refuse anything
+    # that no longer looks like a kernel command line.
+    if [[ -z $line || $line != *root=* ]]; then
+        msg "Abgebrochen: die erzeugte Boot-Zeile sieht nicht stimmig aus.\nEs wurde nichts verändert."
+        return 1
+    fi
+    cp "$CMDLINE" "$CMDLINE.bak"
+    printf '%s\n' "$line" > "$CMDLINE"
+}
+
+# 4Kp60 is off by default on the Pi 4 and silently falls back without this
+# switch — and it only works on the HDMI port next to the power connector.
+offer_4kp60() {  # mode rate
+    local config_txt="$BOOT_DIR/config.txt"
+    [[ $1 == 3840x2160 && $2 == 60 ]] || return 0
+    [[ -f $config_txt ]] || return 0
+    grep -qE '^[[:space:]]*hdmi_enable_4kp60=1' "$config_txt" && return 0
+    yes_no "4K mit 60 Hz braucht auf dem Pi 4 zusätzlich den Schalter\nhdmi_enable_4kp60=1 in der config.txt — und das Kabel\nmuss im HDMI-Anschluss neben dem Stromanschluss stecken.\n\nSchalter jetzt eintragen?" 14 || return 0
+    cp "$config_txt" "$config_txt.bak"
+    printf '\nhdmi_enable_4kp60=1\n' >> "$config_txt"
+}
+
+# Lists the modes the display itself reports — the escape hatch behind "weitere".
+pick_edid_mode() {  # drm-dir -> prints "WxH" or nothing
+    local dir=$1 entries=() first=1 m
+    while read -r m; do
+        [[ -n $m ]] || continue
+        if (( first )); then
+            entries+=("$m" "$(mode_label "$m") — vom Bildschirm bevorzugt"); first=0
+        else
+            entries+=("$m" "$(mode_label "$m")")
+        fi
+    done < <(awk '!seen[$0]++' "$dir/modes" 2>/dev/null)
+    (( ${#entries[@]} )) || return 1
+    whiptail --title "$TITLE — Auflösung" --menu \
+        "Vom Bildschirm gemeldete Auflösungen:" 20 74 9 "${entries[@]}" 3>&1 1>&2 2>&3
+}
+
+menu_resolution() {
+    local outs=() out dir m mode value current splash_size hint=""
+    local rate=""
+
+    if [[ ! -f $CMDLINE ]]; then
+        msg "Boot-Konfiguration nicht gefunden:\n$CMDLINE"
+        return 0
+    fi
+
+    while read -r m; do
+        [[ -n $m ]] && outs+=("$m" "angeschlossen")
+    done < <(connected_outputs)
+
+    if (( ${#outs[@]} == 0 )); then
+        msg "Kein angeschlossener Bildschirm erkannt.\n\nSteckt das HDMI-Kabel? Die Liste kommt direkt vom\nGrafiktreiber des Systems."
+        return 0
+    fi
+    if (( ${#outs[@]} > 2 )); then
+        out=$(whiptail --title "$TITLE — Auflösung" --menu "Welcher Anschluss?" 14 74 4 \
+              "${outs[@]}" 3>&1 1>&2 2>&3) || return 0
+    else
+        out=${outs[0]}
+    fi
+    dir=$(drm_dir_for "$out") || { msg "Anschluss $out nicht gefunden."; return 0; }
+    current=$(current_video_setting "$out")
+
+    # The two settings this installation actually uses, plus escape hatches
+    value=$(whiptail --title "$TITLE — Auflösung" --menu \
+        "Auflösung für $out\n\nAktuell fest eingestellt: ${current:-automatisch}" 17 74 4 \
+        "1920x1080@60" "Full HD — Einrichten und Entwickeln" \
+        "3840x2160@30" "4K UHD — Installation" \
+        ""             "automatisch — was der Bildschirm meldet" \
+        "MEHR"         "weitere Auflösungen des Bildschirms…" 3>&1 1>&2 2>&3) || return 0
+
+    if [[ $value == MEHR ]]; then
+        mode=$(pick_edid_mode "$dir") || {
+            msg "Der Bildschirm meldet keine Auflösungen.\n\nDas passiert, wenn kein Bildschirm angeschlossen ist\noder er kein EDID liefert."
+            return 0
+        }
+        [[ -n $mode ]] || return 0
+        rate=$(whiptail --title "$TITLE — Bildwiederholrate" --menu \
+            "Bildwiederholrate für $mode:" 16 74 4 \
+            ""   "automatisch" \
+            "60" "60 Hz" \
+            "50" "50 Hz" \
+            "30" "30 Hz" 3>&1 1>&2 2>&3) || return 0
+        value="$mode${rate:+@$rate}"
+    else
+        mode=${value%@*}
+        rate=${value#*@}
+        [[ $rate == "$value" ]] && rate=""
+    fi
+
+    if [[ -n $value && -f $SPLASH_TARGET ]]; then
+        splash_size=$(png_size "$SPLASH_TARGET")
+        if [[ -n $splash_size && $splash_size != "$mode" ]]; then
+            hint="\n\nHinweis: das Startbild hat $splash_size und wird skaliert."
+        fi
+    fi
+
+    yes_no "Auflösung fest einstellen?\n\nAnschluss: $out\nAuflösung: ${value:-automatisch}\n\nWirkt nach einem Neustart — auf Konsole, Startbild und\nWiedergabe. Die bisherige Boot-Zeile wird als\ncmdline.txt.bak gesichert.$hint" 18 || return 0
+
+    set_video_setting "$out" "$value" || return 0
+    if [[ -n $value ]]; then
+        offer_4kp60 "$mode" "$rate"
+    fi
+    if yes_no "Gespeichert.\n\nJetzt neu starten, damit die Auflösung wirkt?" 10; then
+        systemctl reboot
+    fi
+}
+
 menu_logs() {
     local unit
     unit=$(whiptail --title "$TITLE — Protokolle" --menu "Welches Protokoll?" 16 74 4 \
@@ -281,6 +917,71 @@ menu_logs() {
     whiptail --title "$unit" --scrolltext --msgbox "${text:-keine Einträge}" 24 78
 }
 
+# ----------------------------------------------------------------- update
+#
+# The first installation cannot come from this menu — on a fresh Pi the menu
+# does not exist yet, so install.sh stays the way in. Updating an installed
+# device is what happens over and over, and that belongs here: fetch, then let
+# the installer run with the settings already stored. For an update the full
+# run is the right thing, unlike for a role change.
+
+git_state() {  # repo -> "branch @ commit (N Commits hinterher)" or a note
+    local repo=$1 branch commit behind
+    [[ -d $repo/.git ]] || { echo "kein Git-Repository"; return; }
+    branch=$(git -C "$repo" rev-parse --abbrev-ref HEAD 2>/dev/null)
+    commit=$(git -C "$repo" rev-parse --short HEAD 2>/dev/null)
+    behind=$(git -C "$repo" rev-list --count "HEAD..@{upstream}" 2>/dev/null)
+    if [[ -n $behind && $behind != 0 ]]; then
+        echo "${branch:-?} @ ${commit:-?} — $behind neue Commits verfügbar"
+    else
+        echo "${branch:-?} @ ${commit:-?}"
+    fi
+}
+
+menu_update() {
+    local repo state dirty warn=""
+    repo=$(repo_path) || return 0
+    state=$(git_state "$repo")
+
+    if overlay_active; then
+        warn="\n\nACHTUNG: Der Schreibschutz ist aktiv — ein Update wäre nach\ndem nächsten Neustart wieder verschwunden. Erst dort\nausschalten und neu starten."
+    fi
+    dirty=$(git -C "$repo" status --porcelain 2>/dev/null | head -3)
+    if [[ -n $dirty ]]; then
+        warn+="\n\nHinweis: im Repository liegen lokale Änderungen."
+    fi
+
+    local choice
+    choice=$(whiptail --title "$TITLE — Aktualisieren" --menu \
+        "Stand: $state\nPfad: $repo$warn" 19 74 3 \
+        "beides" "Neuen Stand holen und einspielen" \
+        "holen"  "Nur neuen Stand holen (git pull)" \
+        "spielen" "Nur einspielen (ohne zu holen)" 3>&1 1>&2 2>&3) || return 0
+
+    if [[ $choice != spielen ]]; then
+        run_detached "Neuen Stand holen" git -C "$repo" pull --ff-only || {
+            msg "Das Holen ist fehlgeschlagen.\n\nBesteht eine Internetverbindung? Über WLAN → In ein\nanderes Netz wechseln kommt das Gerät kurzzeitig\nins Internet."
+            return 0
+        }
+        [[ $choice == holen ]] && return 0
+    fi
+
+    local psk args
+    psk=$(current_psk)
+    args=(--id "$(cfg_get device_id 1)" --role "$(cfg_get role host)"
+          --ssid "$(cfg_get ssid Blaufilter)" --user "$BF_USER"
+          --pin "$(cfg_get debug_pin 1234)")
+    if [[ $(cfg_get open_wifi 0) == 1 ]]; then
+        args+=(--open)
+    else
+        args+=(--psk "$psk")
+    fi
+    [[ -n $(cfg_get txpower "") ]] && args+=(--txpower "$(cfg_get txpower)")
+
+    yes_no "Jetzt einspielen?\n\nDas Installationsscript läuft mit den gespeicherten\nEinstellungen durch. Eigene Werte in der Konfiguration\nbleiben erhalten. Dauert einige Minuten, die Wiedergabe\nwird dabei neu gestartet." 16 || return 0
+    run_detached "Update wird eingespielt" bash "$repo/deploy/install.sh" "${args[@]}"
+}
+
 menu_power() {
     local choice
     choice=$(whiptail --title "$TITLE" --menu "Gerät:" 13 74 2 \
@@ -294,29 +995,57 @@ menu_power() {
 
 # --------------------------------------------------------------------- main
 
-while true; do
-    header="Gerät $(cfg_get device_id '?') · $(cfg_get role '?') · $(ip -4 -o addr show wlan0 2>/dev/null | awk '{print $4}' | head -1)"
-    choice=$(whiptail --title "$TITLE — Wartung" --menu "$header" 20 74 9 \
-        "status"   "Status anzeigen" \
-        "dienste"  "Dienste neu starten" \
-        "rolle"    "Rolle und Geräte-ID ändern" \
-        "wlan"     "WLAN und Sendeleistung" \
-        "pin"      "Debug-PIN ändern" \
-        "video"    "Video dieses Geräts austauschen" \
-        "logs"     "Protokolle ansehen" \
-        "power"    "Neu starten / Herunterfahren" \
-        "ende"     "Beenden" 3>&1 1>&2 2>&3) || break
+main() {
+    if [[ $EUID -ne 0 ]]; then
+        echo "Bitte mit sudo starten: sudo blaufilter-setup" >&2
+        exit 1
+    fi
+    if ! command -v whiptail >/dev/null; then
+        echo "whiptail fehlt (Paket 'whiptail')." >&2
+        exit 1
+    fi
+
+    local header choice
+    while true; do
+    header="Gerät $(cfg_get device_id '?') · $(cfg_get role '?') · $(ip -4 -o addr show wlan0 2>/dev/null | awk '{print $4}' | head -1)
+Stand: $(repo_version)$(overlay_active && echo '
+SCHREIBSCHUTZ AKTIV — Änderungen überleben keinen Neustart')"
+    # Box kept short enough for a plain 80x24 terminal; the list scrolls.
+    choice=$(whiptail --title "$TITLE — Wartung" --menu "$header" 21 74 10 \
+        "status"     "Status anzeigen" \
+        "dienste"    "Dienste starten / stoppen / neu starten" \
+        "rolle"      "Rolle und Geräte-ID ändern" \
+        "wlan"       "WLAN und Sendeleistung" \
+        "aufloesung" "Bildschirmauflösung" \
+        "schutz"     "Schreibschutz gegen Stromausfall" \
+        "pin"        "Debug-PIN ändern" \
+        "video"      "Video dieses Geräts austauschen" \
+        "splash"     "Startbild ändern" \
+        "update"     "Software aktualisieren" \
+        "logs"       "Protokolle ansehen" \
+        "power"      "Neu starten / Herunterfahren" \
+        "ende"       "Beenden" 3>&1 1>&2 2>&3) || break
 
     case $choice in
-        status)  status_report ;;
-        dienste) menu_services ;;
-        rolle)   menu_role ;;
-        wlan)    menu_wifi ;;
-        pin)     menu_pin ;;
-        video)   menu_video ;;
-        logs)    menu_logs ;;
-        power)   menu_power ;;
-        ende)    break ;;
+        status)     status_report ;;
+        dienste)    menu_services ;;
+        rolle)      menu_role ;;
+        wlan)       menu_wifi ;;
+        aufloesung) menu_resolution ;;
+        schutz)     menu_overlay ;;
+        pin)        menu_pin ;;
+        video)      menu_video ;;
+        splash)     menu_splash ;;
+        update)     menu_update ;;
+        logs)       menu_logs ;;
+        power)      menu_power ;;
+        ende)       break ;;
     esac
-done
-clear
+    done
+    clear
+}
+
+# Sourcing this file (tests/shell does) must only define the functions.
+if [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then
+    main "$@"
+fi

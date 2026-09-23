@@ -13,7 +13,8 @@ from vlcsync.vlc import Vlc, VlcProcs
 from vlcsync.vlc_socket import VlcConnectionError
 from vlcsync.vlc_state import PlayState, VlcId
 
-from blaufilter.config import BlaufilterConfig, clamp_rate
+from blaufilter.config import (BlaufilterConfig, TUNING_LIMITS, clamp_rate,
+                               clamp_tuning)
 from blaufilter.tracker import PositionTracker, modular_diff
 from blaufilter import video_ops
 from blaufilter import distribute as video_distribute
@@ -175,18 +176,30 @@ class Controller:
             self._drop_device(vlc_id)
 
     def _poll_positions(self):
-        now = time.time()
+        # Each device gets the timestamp of its own reply, taken at the middle
+        # of the round trip. Using one reading from before the loop made a
+        # device that answers slowly skew everything polled after it: their
+        # replies were dated back to the start of the loop, so their estimated
+        # position ran ahead by however long the slow device had taken. Over
+        # WiFi, where a retry costs a second, that showed up as drift spikes
+        # of about that size which vanished at the next clean reading.
         for vlc_id, device in list(self.devices.items()):
             try:
+                sent_at = time.time()
                 value = device.vlc.get_seek()
-                device.tracker.observe(now, value)
+                observed_at = (sent_at + time.time()) / 2
+                device.tracker.observe(observed_at, value)
                 device.conn_fail_count = 0
             except VlcConnectionError:
                 self._conn_fail(vlc_id, device)
                 continue
             if value is not None and value != device.last_seek_value:
                 device.last_seek_value = value
-                device.last_seek_change_at = now
+                device.last_seek_change_at = observed_at
+
+        # Extrapolated to one common instant, so the positions are comparable
+        now = time.time()
+        for device in self.devices.values():
             device.last_position = device.tracker.est_position(now, device.applied_rate)
 
     def _enforce_play_state(self):
@@ -378,6 +391,31 @@ class Controller:
     def pause(self):
         with self.lock:
             self._set_desired_play_state(PlayState.PAUSED)
+
+    def tuning(self) -> dict:
+        return {key: getattr(self.cfg, key) for key in TUNING_LIMITS}
+
+    def set_tuning(self, values: dict) -> dict:
+        """Apply new drift-correction settings to the running controller.
+
+        The tick loop reads these off cfg every pass, so they take effect at
+        once. Pending over-threshold counts and cooldowns are cleared, as they
+        were accumulated against the old thresholds and would otherwise cause
+        one correction judged by the settings that no longer apply.
+        """
+        with self.lock:
+            applied = {}
+            for key, raw in values.items():
+                if key not in TUNING_LIMITS:
+                    continue
+                applied[key] = clamp_tuning(key, raw)
+                setattr(self.cfg, key, applied[key])
+            if applied:
+                for device in self.devices.values():
+                    device.over_threshold_count = 0
+                    device.cooldown_until = 0.0
+                    device.seek_cooldown_s = 0.0
+            return applied
 
     def set_rate(self, rate: float) -> float:
         with self.lock:
@@ -712,6 +750,7 @@ class Controller:
                 "video": video,
                 "last_correction_at": last_correction_at,
                 "uptime_s": round(time.time() - self.started_at, 1),
+                "tuning": self.tuning(),
                 "video_busy": self._video_busy,
                 "last_video_job": self.last_video_job,
             }

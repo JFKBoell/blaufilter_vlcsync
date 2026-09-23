@@ -281,6 +281,26 @@
   #uploadbtn:disabled { opacity: 0.35; cursor: wait; }
   #uploadbtn:active { opacity: 0.8; }
   #videostatus { margin-top: 1rem; font-size: 0.85rem; color: var(--muted); line-height: 1.45; }
+  .tuning { display: flex; flex-direction: column; gap: 0.75rem; margin-top: 0.25rem; }
+  .tuning .field {
+    display: flex; align-items: center; justify-content: space-between; gap: 0.8rem;
+    margin: 0; font-size: 0.95rem; color: var(--fg);
+  }
+  .tuning .row { display: flex; align-items: center; gap: 0.4rem; }
+  .tuning input {
+    width: 5.5rem; padding: 0.55rem 0.6rem; font-size: 1rem; font-family: inherit;
+    background: var(--bg); color: var(--fg);
+    border: 1px solid var(--line); border-radius: 0;
+    font-variant-numeric: tabular-nums; text-align: right;
+  }
+  .tuning em { font-style: normal; color: var(--muted); width: 1rem; }
+  #tuningbtn {
+    margin-top: 0.5rem; width: 100%; padding: 0.85rem 1rem; font-size: 0.95rem; text-align: left;
+    border: 1px solid var(--line); border-radius: 0; cursor: pointer;
+    background: transparent; color: var(--fg);
+  }
+  #tuningbtn:active { background: var(--press); }
+  #tuningstatus { margin-top: 1rem; font-size: 0.85rem; color: var(--muted); line-height: 1.45; }
   .ok { color: var(--muted); }
   .fail { color: var(--fg); font-weight: 600; }
 
@@ -394,6 +414,26 @@
   </div>
 
   <div class="card">
+    <label>Driftkorrektur</label>
+    <div class="tuning">
+      <label class="field">
+        <span>Schwelle für einen Sprung</span>
+        <span class="row"><input type="number" id="t_drift" min="0.2" max="10" step="0.1"><em>s</em></span>
+      </label>
+      <label class="field">
+        <span>Zyklen über der Schwelle</span>
+        <span class="row"><input type="number" id="t_cycles" min="1" max="20" step="1"><em>×</em></span>
+      </label>
+      <label class="field">
+        <span>Mindestabstand zweier Sprünge</span>
+        <span class="row"><input type="number" id="t_cooldown" min="1" max="120" step="1"><em>s</em></span>
+      </label>
+      <button type="button" id="tuningbtn">Übernehmen</button>
+    </div>
+    <div id="tuningstatus"></div>
+  </div>
+
+  <div class="card">
     <label>Video austauschen</label>
     <div class="upload-row">
       <input type="file" id="videofile" accept="video/*,.mp4,.mkv,.mov">
@@ -405,6 +445,9 @@
         Nach Upload VLC neu starten
       </label>
       <button type="button" id="uploadbtn">Video verteilen</button>
+    </div>
+    <div class="actions">
+      <button type="button" id="peersbtn">Videos der Geräte prüfen</button>
     </div>
     <div id="videostatus"></div>
   </div>
@@ -425,6 +468,15 @@
   const healthlabel = document.getElementById('healthlabel');
   const issuesEl = document.getElementById('issues');
   const uploadbtn = document.getElementById('uploadbtn');
+  const peersbtn = document.getElementById('peersbtn');
+  const tuningbtn = document.getElementById('tuningbtn');
+  const tuningstatus = document.getElementById('tuningstatus');
+  const tuningFields = {
+    drift_threshold: document.getElementById('t_drift'),
+    hysteresis_cycles: document.getElementById('t_cycles'),
+    cooldown_s: document.getElementById('t_cooldown'),
+  };
+  let tuningTouched = false;
   const videostatus = document.getElementById('videostatus');
   const mainview = document.getElementById('mainview');
   const debugview = document.getElementById('debugview');
@@ -569,6 +621,15 @@
       document.getElementById('videometa').textContent = 'Video: ' + parts.filter(Boolean).join(' · ');
     }
 
+    // Not while editing — the poll would overwrite half-typed numbers
+    if (!tuningTouched && st.tuning) {
+      for (const [key, input] of Object.entries(tuningFields)) {
+        if (st.tuning[key] != null && document.activeElement !== input) {
+          input.value = st.tuning[key];
+        }
+      }
+    }
+
     if (!uploading) renderJob(st.last_video_job);
     uploadbtn.disabled = uploading || !!st.video_busy;
 
@@ -700,6 +761,81 @@
   });
   document.getElementById('restart').addEventListener('click', () => {
     debugFetch('/api/restart_playback', { method: 'POST' }).then(poll);
+  });
+
+  Object.values(tuningFields).forEach(input => {
+    input.addEventListener('input', () => { tuningTouched = true; });
+  });
+
+  tuningbtn.addEventListener('click', async () => {
+    const payload = {};
+    for (const [key, input] of Object.entries(tuningFields)) {
+      if (input.value !== '') payload[key] = Number(input.value);
+    }
+    tuningbtn.disabled = true;
+    tuningstatus.textContent = 'Übernehme…';
+    try {
+      const r = await debugFetch('/api/tuning', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload),
+      });
+      const body = await r.json().catch(() => ({}));
+      if (!r.ok) {
+        tuningstatus.innerHTML = `<span class="fail">${body.error || 'fehlgeschlagen'}</span>`;
+        return;
+      }
+      const t = body.tuning || {};
+      // The server clamps out-of-range values, so show what really applies
+      for (const [key, input] of Object.entries(tuningFields)) {
+        if (t[key] != null) input.value = t[key];
+      }
+      tuningTouched = false;
+      tuningstatus.innerHTML = body.saved
+        ? '<span class="ok">Übernommen und gespeichert.</span>'
+        : `<span class="fail">${body.note}</span>`;
+    } catch (e) {
+      tuningstatus.innerHTML = `<span class="fail">${e.message || e}</span>`;
+    } finally {
+      tuningbtn.disabled = false;
+    }
+  });
+
+  peersbtn.addEventListener('click', async () => {
+    peersbtn.disabled = true;
+    videostatus.textContent = 'Frage die Geräte ab…';
+    try {
+      const r = await debugFetch('/api/video/peers');
+      const body = await r.json().catch(() => ({}));
+      if (!r.ok) {
+        videostatus.innerHTML = `<span class="fail">${body.error || 'Abfrage fehlgeschlagen'}</span>`;
+        return;
+      }
+      const rows = body.peers || [];
+      let html = '<div>Videos auf den Geräten</div>' +
+        '<div class="tablewrap"><table><thead><tr><th>Gerät</th><th>Größe</th>' +
+        '<th>Kennung</th></tr></thead><tbody>';
+      html += rows.map(p => {
+        if (!p.ok) {
+          return `<tr class="offline"><td>${p.id ?? '?'}</td><td colspan="2">nicht erreichbar</td></tr>`;
+        }
+        const v = p.video || {};
+        if (!v.present) {
+          return `<tr><td>${p.id ?? '?'}</td><td colspan="2" class="fail">kein Video</td></tr>`;
+        }
+        // Different videos per device are intentional, so an equal fingerprint
+        // is a note, not a verdict.
+        const mark = p.matches_host ? ' <span class="badge">= Host</span>' : '';
+        return `<tr><td>${p.id ?? '?'}</td><td>${fmtBytes(v.size_bytes)}</td>` +
+          `<td>${v.fingerprint || '—'}${mark}</td></tr>`;
+      }).join('');
+      html += '</tbody></table></div>';
+      videostatus.innerHTML = html;
+    } catch (e) {
+      videostatus.innerHTML = `<span class="fail">${e.message || e}</span>`;
+    } finally {
+      peersbtn.disabled = false;
+    }
   });
 
   uploadbtn.addEventListener('click', async () => {

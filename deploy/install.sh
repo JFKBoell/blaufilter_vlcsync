@@ -71,20 +71,7 @@ fi
 
 echo "==> Blaufilter install: id=$BF_ID role=$BF_ROLE user=$BF_USER"
 
-echo "==> Writing /etc/blaufilter/config"
-install -d /etc/blaufilter
-# ssid/open_wifi/txpower/repo_dir are not read by the controller — they let the
-# setup tool re-run this installer with the settings already in use.
-cat > /etc/blaufilter/config <<EOF
-[blaufilter]
-device_id = $BF_ID
-role = $BF_ROLE
-debug_pin = $BF_PIN
-ssid = $BF_SSID
-open_wifi = $BF_OPEN
-txpower = $BF_TXPOWER
-repo_dir = $BF_REPO_DIR
-EOF
+bash "$SCRIPT_DIR/steps/05-config.sh"
 
 BOOT_DIR=/boot/firmware
 [[ -d "$BOOT_DIR" ]] || BOOT_DIR=/boot
@@ -139,6 +126,12 @@ if [[ "$BF_ROLE" == "host" ]]; then
     fi
     echo "    Otherwise: http://blaufilter.local or http://192.168.4.1"
 fi
+if [[ "$BF_ID" == "1" ]]; then
+    echo "    SSH: ssh $BF_USER@192.168.4.1  (or $BF_USER@blaufilter.local)"
+else
+    echo "    SSH: ssh $BF_USER@192.168.4.1$BF_ID"
+fi
+echo "    Settings menu on the device: sudo blaufilter-setup"
 if [[ -z "$BF_VIDEO" ]]; then
     echo "    NOTE: no --video given. Copy your video to /opt/blaufilter/video/main.mp4"
 fi

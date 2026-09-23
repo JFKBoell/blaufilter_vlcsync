@@ -151,6 +151,7 @@ Das Script richtet ein:
 | Video-Agent (System-Unit `blaufilter-agent`, Port 4213) | ✓ | ✓ |
 | Port-Sperre 4212/4213 (System-Unit `blaufilter-firewall`) | ✓ | ✓ |
 | Wartungsmenü `blaufilter-setup` | ✓ | ✓ |
+| SSH-Zugang aktiviert | ✓ | ✓ |
 | Controller + Web-UI (System-Unit `blaufilter-controller`, Waitress :80) | ✓ | — |
 | Namensauflösung `blaufilter.local` (mDNS + DHCP-DNS) | ✓ | — |
 | Desktop-Autologin, Bildschirm-Blanking aus | ✓ | ✓ |
@@ -161,9 +162,39 @@ Das Script richtet ein:
 Mit `--splash bild.png` ersetzt die Installation das Boot-Splash-Bild
 (Plymouth-Theme „pix"). **Empfohlene Auflösung: die native Auflösung des
 Displays** — bei 4K-Bildschirmen 3840×2160; 1920×1080 funktioniert ebenfalls
-und wird skaliert. Format: PNG. Das Original wird als
-`/usr/share/plymouth/themes/pix/splash.png.orig` gesichert (zum
-Wiederherstellen zurückkopieren und `sudo update-initramfs -u` ausführen).
+und wird skaliert. Format: PNG.
+
+Im Verzeichnis `deploy/` liegen fertige Startbilder `Blaufilter_1.png` bis
+`Blaufilter_3.png`; Assistent und Wartungsmenü schlagen automatisch das zur
+Geräte-ID passende vor.
+
+Das Original wird als `/usr/share/plymouth/themes/pix/splash.png.orig`
+gesichert — „Startbild ändern" im Wartungsmenü holt es auf Wunsch zurück.
+
+Plymouth liest das Bild aus dem Dateisystem, ein initramfs trägt nur eine
+Kopie. Raspberry Pi OS bootet ohne initramfs, sofern die `config.txt` keines
+anfordert — nur dann wird es überhaupt neu gebaut. Schlägt das fehl
+(`mkinitramfs: failed to determine device for /`), erscheint eine Warnung,
+**das Startbild ist aber trotzdem gesetzt**. Ursache ist dann meist
+`MODULES=dep` in `/etc/initramfs-tools/initramfs.conf`; auf `MODULES=most`
+umstellen und einmal `sudo update-initramfs -u` ausführen behebt es.
+
+### SSH-Zugang
+
+Die Installation aktiviert SSH auf jedem Gerät (inklusive der Host-Schlüssel,
+die ein frisches Image noch nicht mitbringt). Die Adressen folgen den
+Geräte-IDs:
+
+```bash
+ssh blau@blaufilter.local     # Host, alternativ blau@192.168.4.1
+ssh blau@192.168.4.12         # Gerät 2
+ssh blau@192.168.4.13         # Gerät 3
+```
+
+> **Bei offenem WLAN (`--open`)** kann jeder in Funkreichweite den SSH-Port
+> erreichen. Dann ein starkes Passwort für den Benutzer setzen (`passwd`),
+> besser noch auf Anmeldung per Schlüssel umstellen. Wird SSH nicht gebraucht:
+> `sudo raspi-config nonint do_ssh 1` schaltet es wieder ab.
 
 ### Namensauflösung `blaufilter.local`
 
@@ -218,6 +249,11 @@ das Web-UI läuft über einfaches HTTP im geschlossenen WLAN.
 - **Gerätetabelle** — zeigt pro Gerät Position und aktuellen Drift (grün
   < 250 ms, orange < 500 ms, rot darüber). Das Master-Gerät ist markiert.
   Offline-Kandidaten erscheinen grau.
+- **Driftkorrektur** — die drei Werte, die das Nachregeln steuern, direkt
+  einstellbar: Schwelle für einen Sprung, Anzahl der Zyklen über der Schwelle
+  und Mindestabstand zweier Sprünge. Änderungen gelten **sofort**, ohne
+  Neustart, und werden für den nächsten Start gespeichert. Werte außerhalb
+  des sinnvollen Bereichs werden auf die Grenze gesetzt und so zurückgemeldet.
 - **Jetzt neu synchronisieren** — erzwingt sofortigen Seek aller Geräte auf
   die Master-Position.
 - **Wiedergabe von vorn** — setzt alle Geräte auf Position 0.
@@ -228,7 +264,10 @@ das Web-UI läuft über einfaches HTTP im geschlossenen WLAN.
   Ziel** bekommt nur dieses Gerät die Datei — so kann jedes Gerät ein eigenes
   Video zeigen. **Alle Videos müssen gleich lang sein**, sonst passt die
   Drift-Synchronisation nicht (das Status-Panel warnt bei abweichenden
-  Längen). Optional wird VLC nach dem Upload neu gestartet; das Gerät steigt
+  Längen). **Videos der Geräte prüfen** zeigt, welche Datei gerade auf
+  welchem Gerät liegt — die Kennung wird aus dem Inhalt berechnet (Größe plus
+  Prüfsumme über Anfang und Ende), gleiche Kennung heißt also gleiches Video,
+  unabhängig davon, wann es dorthin kopiert wurde. Optional wird VLC nach dem Upload neu gestartet; das Gerät steigt
   dann bei 0 ein und wird vom Controller auf die Master-Position gezogen.
   Große 4K-Dateien über 2,4‑GHz-WLAN können mehrere Minuten dauern; auf dem
   Host wird während des Uploads kurzzeitig etwa der doppelte Speicherplatz
@@ -239,7 +278,12 @@ das Web-UI läuft über einfaches HTTP im geschlossenen WLAN.
 - Der Controller pollt alle VLCs ~10× pro Sekunde über deren RC-Interface.
   Da VLC die Position nur in ganzen Sekunden meldet, wird der Sekundenwechsel
   abgepasst (Boundary-Sampling) und dazwischen mit der Abspielrate
-  extrapoliert → Messgenauigkeit ~±150 ms.
+  extrapoliert. Der Wechsel wird auf die **Mitte zwischen zwei Abfragen**
+  datiert — er kann irgendwo darin liegen —, und jede Antwort bekommt den
+  Zeitstempel ihres eigenen Umlaufs. Die Messgenauigkeit entspricht damit
+  etwa dem halben Abfrageabstand, im Normalbetrieb rund ±50–100 ms.
+  Antwortet ein Gerät wegen einer WLAN-Wiederholung verzögert, verschlechtert
+  sich **nur dessen** Genauigkeit, nicht die der anderen.
 - **Sanfte Korrektur (Standard):** Abweichungen von 0,15–3 s werden unsichtbar
   über eine temporär um 2–8 % verstellte Abspielrate ausgeglichen — kein
   Ruckeln, das Gerät „schwimmt" zurück auf die Master-Position.
@@ -256,7 +300,19 @@ das Web-UI läuft über einfaches HTTP im geschlossenen WLAN.
 
 Einstellbar in `/etc/blaufilter/config`: `drift_threshold`,
 `hysteresis_cycles`, `cooldown_s`, `rate_nudge`, `web_port`, `random_start`,
-`debug_pin`.
+`debug_pin`. Von Hand eingetragene Werte **überstehen ein erneutes Ausführen
+des Install-Scripts** — es schreibt nur die Schlüssel neu, die es selbst
+verwaltet (Geräte-ID, Rolle, PIN, WLAN-Angaben, Repository-Pfad).
+
+Die drei Werte der Driftkorrektur lassen sich außerdem im Web-UI ändern
+(Debug-Seite → *Driftkorrektur*). Sie landen in
+`/opt/blaufilter/state/tuning` und haben Vorrang vor
+`/etc/blaufilter/config`. Der eigene Ort ist nötig, weil der Controller als
+normaler Benutzer läuft: `/etc/blaufilter` gehört root, und ein atomarer
+Schreibvorgang legt zuerst eine temporäre Datei **im Verzeichnis** an — dafür
+reicht es nicht, nur die Zieldatei zu übereignen. Bei aktivem Schreibschutz
+greift die Änderung sofort, überlebt aber keinen Neustart; darauf weist die
+Oberfläche hin.
 Ruckelt es trotzdem periodisch: prüfen, ob das Video mit kurzem
 Keyframe-Abstand (GOP ≤ 2 s) kodiert ist — Seeks landen sonst weit daneben
 und provozieren Folgekorrekturen.
@@ -264,36 +320,187 @@ und provozieren Folgekorrekturen.
 ## Wartung: `sudo blaufilter-setup`
 
 Auf jedem eingerichteten Gerät liegt ein Menü für den laufenden Betrieb —
-am Bildschirm wie über SSH:
+am Bildschirm wie über SSH. Auf dem Desktop liegt dafür die Verknüpfung
+**„Blaufilter Einstellungen"** (auch im Startmenü unter *Einstellungen*);
+ein Doppelklick öffnet das Menü, ohne Terminal und ohne SSH.
+
+`/usr/local/sbin/blaufilter-setup` ist ein **Symlink auf
+`deploy/blaufilter-setup.sh` im Repository** — nach `git pull` oder
+`git checkout` ist also sofort die Fassung aktiv, die im Arbeitsverzeichnis
+steht. Welche das ist, zeigt das Menü in der Kopfzeile und im Status an
+(`Stand: <branch> @ <commit>`). Fehlt ein Menüpunkt, lohnt zuerst ein Blick
+dorthin: meist steht das Repository auf einem Zweig, der ihn noch nicht
+enthält.
 
 | Punkt | Zweck |
 |---|---|
 | **Status anzeigen** | Rolle, IP, Sendeleistung, Zustand aller Dienste; auf dem Host zusätzlich verbundene Geräte mit Drift und offene Hinweise |
-| **Dienste neu starten** | VLC, Video-Agent, Controller, Port-Sperre — einzeln oder alle |
+| **Dienste starten / stoppen / neu starten** | VLC, Video-Agent, Controller, Port-Sperre — einzeln oder alle. Vor dem Stoppen wird gezeigt, was dadurch ausfällt; nach einem Geräteneustart laufen sie wieder von selbst |
 | **Rolle und Geräte-ID ändern** | Der Klon-Fall: SD-Karte kopiert, Gerät soll Client statt Host sein. Räumt die Einstellungen der alten Rolle auf |
-| **WLAN und Sendeleistung** | SSID, offen/WPA2, Sendeleistung ändern |
+| **WLAN** | Eigenes WLAN ändern (SSID, offen/WPA2, Sendeleistung) — dauert Sekunden, da nur die Netzwerkeinstellungen neu geschrieben werden, Passwort auf Wunsch beibehalten. Außerdem: in ein anderes Netz wechseln und wieder zurück (siehe unten) |
+| **Bildschirmauflösung** | Auflösung und Bildwiederholrate fest einstellen oder wieder dem Bildschirm überlassen (siehe unten) |
+| **Schreibschutz** | Overlay-Dateisystem ein-/ausschalten, damit Stromausfall die SD-Karte nicht beschädigt (siehe unten) |
+| **Software aktualisieren** | Neuen Stand holen und einspielen — der übliche Weg für Updates (siehe unten) |
 | **Debug-PIN ändern** | PIN der Debug-Seite setzen oder Abfrage abschalten |
 | **Video austauschen** | Lokale Datei einsetzen (Verteilung auf alle Geräte macht das Web-UI) |
+| **Startbild ändern** | Mitgelieferte Bilder (`Blaufilter_<ID>.png`), eigene PNGs oder das ursprüngliche Startbild zurückholen; zeigt vorher die Auflösung an |
 | **Protokolle ansehen** | Journal von Controller, Agent, NetworkManager und VLC |
 
-Änderungen an Rolle oder WLAN lassen das Installationsscript erneut laufen —
-es gibt also nur einen Installationsweg, der gepflegt werden muss. Das
-funktioniert auch ohne Internet, solange keine neuen Pakete gebraucht werden.
+**WLAN-Änderungen und Rollenwechsel** fassen nur an, was sich tatsächlich
+unterscheidet, und sind in Sekunden erledigt; die Wiedergabe läuft weiter.
+Beim Rollenwechsel sind das Rechnername, `/etc/blaufilter/config`, der
+passende Netzwerkschritt — der die Reste der alten Rolle mit entfernt — und
+beim Host zusätzlich der Controller. Pakete, Python-Paket, VLC-Autostart,
+Agent, Port-Sperre und Startbild sind für beide Rollen gleich und bleiben
+unangetastet.
+
+Beides läuft **abgekoppelt von der Sitzung**: Das Neukonfigurieren des WLAN
+kappt die Verbindung, über die man gerade arbeitet. Der Schritt wird trotzdem
+zu Ende geführt; nach dem erneuten Verbinden steht das Ergebnis in
+`/var/log/blaufilter-setup.log`.
 
 > **Nach dem Klonen einer SD-Karte** hat das kopierte Gerät noch ID und Rolle
 > des Originals. `sudo blaufilter-setup` → „Rolle und Geräte-ID ändern"
 > stellt das gerade; sonst spannen zwei Geräte ein WLAN namens `Blaufilter`
 > auf und die Clients finden den Host nicht mehr.
 
+### In ein anderes Netz wechseln (für Updates)
+
+Unter **WLAN → In ein anderes Netz wechseln** listet das Menü die
+gespeicherten Netze auf; ein neues lässt sich mit SSID und Passwort
+eintragen. Gedacht ist das fürs Entwickeln: kurz in ein Netz mit
+Internetzugang wechseln, aktualisieren, zurückwechseln.
+
+Beim Beitritt wird gefragt, wie lange er gelten soll:
+
+- **Nur jetzt** — das fremde Profil bekommt `autoconnect no`. Nach jedem
+  Neustart ist das Gerät wieder im Blaufilter-WLAN; im Zweifel hilft also
+  Stromkabel ziehen.
+- **Dauerhaft** — das fremde Profil bekommt `autoconnect yes` und eine höhere
+  Priorität als das Blaufilter-Profil. Das Gerät bevorzugt dieses Netz künftig
+  und geht nur dann ins Blaufilter-WLAN, wenn es nicht in Reichweite ist.
+  Praktisch für ein Entwicklungsgerät am Schreibtisch. **Auf dem Host bleiben
+  die Clients dabei ohne Verbindung**, solange das andere Netz erreichbar ist.
+
+Dauerhaft bevorzugte Netze sind in der Liste gekennzeichnet; „Zurück ins
+Blaufilter-WLAN" bietet an, die Bevorzugung wieder aufzuheben.
+
+Unabhängig davon gilt: **Scheitert der Beitritt** (falsches Passwort, Netz
+außer Reichweite), aktiviert das Gerät von selbst wieder sein
+Blaufilter-Profil.
+
+Solange der Host in einem fremden Netz hängt, ist das Blaufilter-WLAN weg —
+Clients und Web-UI sind dann nicht erreichbar. Die neue Adresse des Geräts
+steht nach dem Wechsel im Protokoll (`/var/log/blaufilter-setup.log`), da die
+alte Verbindung dabei abbricht. Zurück geht es über **WLAN → Zurück ins
+Blaufilter-WLAN**.
+
+Im AP-Betrieb kann das Funkmodul meist nicht nach Netzen suchen; der
+Netzwerkname wird dann eingetippt statt aus einer Liste gewählt.
+
+### Schreibschutz gegen Stromausfall
+
+Eine Installation wird am Netzschalter ausgeschaltet — und genau das ist die
+häufigste Ursache für beschädigte SD-Karten: Beim plötzlichen Stromverlust
+gehen Schreibvorgänge verloren, die noch im Puffer standen. Besonders
+anfällig sind Werkzeuge, die viele kleine Dateien schreiben (git etwa, oder
+die Systemprotokolle).
+
+**Die wirksamste Maßnahme** ist der Menüpunkt *Schreibschutz*: Er schaltet
+das Overlay-Dateisystem ein. Das Wurzeldateisystem wird dann nur noch gelesen,
+alle Schreibvorgänge landen im Arbeitsspeicher und sind nach einem Neustart
+wieder weg. Stromausfall kann das System damit nicht mehr beschädigen.
+
+```
+Betrieb:  Schreibschutz ein   → Stecker ziehen ist unkritisch
+Wartung:  Schreibschutz aus   → Änderungen bleiben erhalten
+```
+
+Beim Einschalten prüft das Menü, ob das initramfs baubar ist, und bietet an,
+die bekannte Bremse `MODULES=dep` auf `MODULES=most` zu korrigieren — dieselbe
+Ursache, die beim Startbild die Warnung auslöst. Ist der Schreibschutz aktiv,
+steht das in der Kopfzeile des Menüs und im Status, damit man nicht versehentlich
+Einstellungen vornimmt, die der nächste Neustart verwirft.
+
+**Ergänzend sinnvoll:**
+
+- **Sauber herunterfahren per Taster:** `dtoverlay=gpio-shutdown` in der
+  `config.txt` macht aus einem Taster zwischen GPIO3 und Masse einen
+  Ausschalter. Kurz drücken, warten bis die grüne LED aufhört zu blinken,
+  dann Strom trennen.
+- **Golden Image:** Ein fertig eingerichtetes Gerät einmal als Image sichern
+  (`dd` oder Raspberry Pi Imager). Im Schadensfall ist die Karte in Minuten
+  neu bespielt, statt alles erneut einzurichten.
+- **Git-Reparatur:** Ist ein Repository beschädigt, hilft schlicht neu klonen —
+  es enthält nichts, was nur dort existiert. Vorher `git fsck` zeigt den
+  Schaden, `git config core.fsync loose-object,index,refs` macht künftige
+  Schreibvorgänge haltbarer (kostet etwas Tempo).
+
+### Bildschirmauflösung
+
+Das Menü bietet die beiden Einstellungen an, die im Alltag gebraucht werden:
+
+- **1920×1080 @ 60 Hz** — zum Einrichten und Entwickeln
+- **3840×2160 @ 30 Hz** — für die Installation
+- **automatisch** — der Bildschirm entscheidet
+- **weitere…** — alle Auflösungen, die der Bildschirm meldet
+
+Die Liste unter „weitere" kommt direkt vom Grafiktreiber (`/sys/class/drm`),
+funktioniert also ohne Desktop-Sitzung auch per SSH; ganz oben steht die vom
+Bildschirm bevorzugte Auflösung.
+
+Festgelegt wird die Auswahl über den Kernel-Parameter
+`video=HDMI-A-1:3840x2160@30` in der `cmdline.txt`. Das wirkt auf **Konsole,
+Startbild und Wiedergabe gleichermaßen** und greift ab dem nächsten Neustart.
+Die bisherige Boot-Zeile wird als `cmdline.txt.bak` gesichert; das Menü
+schreibt außerdem nur, wenn die erzeugte Zeile noch wie eine gültige
+Kernel-Befehlszeile aussieht.
+
+Zwei Punkte zur Pi-4-Hardware:
+
+- **4K mit 60 Hz** ist ab Werk abgeschaltet. Wird es gewählt, bietet das Menü
+  an, `hdmi_enable_4kp60=1` in die `config.txt` einzutragen — und das Kabel
+  muss im HDMI-Anschluss **neben dem Stromanschluss** stecken.
+- **4K mit 30 Hz** ist für die Wiedergabe die unkompliziertere Wahl und für
+  4K-Material mit 24–30 fps völlig ausreichend.
+
 ### Updates einspielen
 
-Auf jedem Gerät: `git pull` im Repo, dann das Install-Script **mit denselben
-Argumenten wie bei der Erstinstallation** erneut ausführen. Auf Geräten, die
-nur noch im Blaufilter-WLAN hängen (kein Internet), installiert das Script
-offline aus dem lokalen Repo — **neue Python-Abhängigkeiten können dabei
-nicht nachgeladen werden**. Bringt ein Update neue Abhängigkeiten mit (z. B.
-`waitress` für den Video-Agent), das Gerät vorübergehend per Ethernet oder
-anderem WLAN ans Internet hängen.
+Der übliche Weg ist **„Software aktualisieren"** im Wartungsmenü. Es zeigt den
+aktuellen Stand samt Zweig und Commit, holt auf Wunsch den neuen (`git pull`)
+und spielt ihn anschließend **mit den gespeicherten Einstellungen** ein —
+Geräte-ID, Rolle, WLAN und PIN müssen also nicht erneut eingetippt werden.
+Holen und Einspielen lassen sich auch getrennt auslösen.
+
+Drei Dinge, auf die das Menü selbst hinweist:
+
+- **Schreibschutz**: Ist er aktiv, wäre das Update nach dem nächsten Neustart
+  wieder weg. Erst ausschalten, neu starten, dann aktualisieren.
+- **Internet**: `git pull` braucht eine Verbindung. Über *WLAN → In ein
+  anderes Netz wechseln* kommt das Gerät kurzzeitig ins Internet.
+- **Neue Abhängigkeiten**: Auf Geräten ohne Internet installiert das Script
+  offline aus dem lokalen Repo — neue Python-Pakete lassen sich so allerdings
+  nicht nachladen.
+
+Die Erstinstallation läuft weiterhin über `setup.sh` bzw. `install.sh`: Auf
+einem frischen Pi gibt es das Menü ja noch nicht.
+
+## Tests
+
+```bash
+tests/shell/run.sh              # Deploy-Scripts und Wartungsmenü
+tests/shell/run.sh resolution   # nur passende Dateien
+pytest tests/                   # Controller, Web-API, Video-Verteilung
+```
+
+Die Shell-Tests brauchen weder einen Raspberry Pi noch Root-Rechte:
+`tests/shell/harness.sh` baut für jeden Lauf eine Wegwerf-Umgebung mit
+Konfigurationsdatei, Boot-Dateien, nachgebildetem Grafiktreiber und
+Attrappen für `nmcli`, `systemctl`, `raspi-config` und `whiptail`. Dialoge
+werden über eine Antwort-Warteschlange bedient, sodass sich ganze
+Menüabläufe durchspielen lassen — inklusive Abbruch. Gegen die echten
+Deploy-Schritte laufen ebenfalls Tests (Konfigurations-Zusammenführung,
+Startbild mit und ohne funktionierendes initramfs).
 
 ## Notausstieg: `blaufilter.txt` auf der Boot-Partition
 

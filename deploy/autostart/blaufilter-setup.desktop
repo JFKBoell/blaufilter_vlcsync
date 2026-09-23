@@ -1,0 +1,8 @@
+[Desktop Entry]
+Type=Application
+Name=Blaufilter Einstellungen
+Comment=Auflösung, WLAN, Dienste, Video und Startbild verwalten
+Exec=sudo blaufilter-setup
+Icon=preferences-desktop
+Terminal=true
+Categories=Settings;System;

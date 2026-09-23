@@ -6,10 +6,25 @@ from dataclasses import dataclass, field
 from typing import List
 
 CONFIG_PATH = "/etc/blaufilter/config"
+TUNING_PATH = "/opt/blaufilter/state/tuning"
+"""Sync settings changed from the web UI; values here win over CONFIG_PATH.
+
+Not in /etc/blaufilter: that directory belongs to root, and writing a file
+atomically means creating a temporary one next to it, which needs write
+permission on the *directory* — owning the file alone is not enough. This is
+runtime state written by the service user, so it lives under /opt/blaufilter
+in a directory the installer hands to that user."""
 DEFAULT_VIDEO_PATH = "/opt/blaufilter/video/main.mp4"
 
 RATE_MIN = 0.1
 RATE_MAX = 3.0
+
+# What the web UI may change, with the range it is allowed to set.
+TUNING_LIMITS = {
+    "drift_threshold": (0.2, 10.0),
+    "hysteresis_cycles": (1, 20),
+    "cooldown_s": (1.0, 120.0),
+}
 
 
 @dataclass
@@ -69,7 +84,50 @@ class BlaufilterConfig:
         return None
 
 
-def load(config_path: str = CONFIG_PATH) -> BlaufilterConfig:
+def clamp_tuning(key: str, value) -> float | int:
+    """Coerce a tuning value into its allowed range. Raises ValueError on junk."""
+    low, high = TUNING_LIMITS[key]
+    number = float(value)
+    number = max(low, min(high, number))
+    return int(round(number)) if isinstance(low, int) else round(number, 2)
+
+
+def read_tuning(tuning_path: str | None = None) -> dict:
+    # Resolved at call time, not bound as a default: the path is a module
+    # constant that tests replace.
+    tuning_path = tuning_path or TUNING_PATH
+    parser = configparser.ConfigParser(interpolation=None)
+    if not (os.path.exists(tuning_path) and parser.read(tuning_path)
+            and parser.has_section("blaufilter")):
+        return {}
+    section = parser["blaufilter"]
+    values = {}
+    for key in TUNING_LIMITS:
+        if key in section:
+            try:
+                values[key] = clamp_tuning(key, section[key])
+            except ValueError:
+                continue
+    return values
+
+
+def write_tuning(values: dict, tuning_path: str | None = None) -> None:
+    """Persist the web UI's sync settings. Raises OSError when the filesystem
+    is read-only — which it is whenever the write protection is enabled."""
+    tuning_path = tuning_path or TUNING_PATH
+    parser = configparser.ConfigParser(interpolation=None)
+    parser["blaufilter"] = {k: str(v) for k, v in values.items()}
+    directory = os.path.dirname(tuning_path)
+    if directory:
+        os.makedirs(directory, exist_ok=True)
+    tmp = tuning_path + ".tmp"
+    with open(tmp, "w") as handle:
+        parser.write(handle)
+    os.replace(tmp, tuning_path)
+
+
+def load(config_path: str = CONFIG_PATH,
+         tuning_path: str | None = None) -> BlaufilterConfig:
     cfg = BlaufilterConfig()
 
     # interpolation off: values like an SSID containing '%' must not be parsed
@@ -91,6 +149,10 @@ def load(config_path: str = CONFIG_PATH) -> BlaufilterConfig:
         cfg.vlc_unit = section.get("vlc_unit", cfg.vlc_unit)
         cfg.random_start = section.getboolean("random_start", cfg.random_start)
         cfg.debug_pin = section.get("debug_pin", cfg.debug_pin).strip()
+
+    # Applied last: what was changed at runtime beats the installed defaults
+    for key, value in read_tuning(tuning_path).items():
+        setattr(cfg, key, value)
 
     if env_hosts := os.environ.get("BLAUFILTER_HOSTS"):
         cfg.dev_hosts = [h.strip() for h in env_hosts.split(",") if h.strip()]
