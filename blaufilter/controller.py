@@ -703,6 +703,16 @@ class Controller:
 
     def status_snapshot(self) -> dict:
         with self.lock:
+            # Ages are reported, not absolute timestamps: the Pi has no
+            # real-time clock and no internet on its own network, so its clock
+            # can be hours off from the phone showing the page. A browser
+            # subtracting one from the other produced nonsense like "40 h ago"
+            # on a device that had been up for six.
+            now = time.time()
+
+            def age(timestamp):
+                return None if timestamp is None else max(0.0, round(now - timestamp, 1))
+
             master_id = self._pick_master()
             connected_by_addr: Dict[str, dict] = {}
             last_correction_at = None
@@ -719,6 +729,7 @@ class Controller:
                     "drift_ms": None if device.last_drift is None else round(device.last_drift * 1000),
                     "play_state": device.play_state.value,
                     "last_correction_at": device.last_correction_at,
+                    "last_correction_age_s": age(device.last_correction_at),
                     "length": device.length,
                 }
                 connected_by_addr[row["address"]] = row
@@ -749,7 +760,8 @@ class Controller:
                 "connected_devices": connected,
                 "video": video,
                 "last_correction_at": last_correction_at,
-                "uptime_s": round(time.time() - self.started_at, 1),
+                "last_correction_age_s": age(last_correction_at),
+                "uptime_s": round(now - self.started_at, 1),
                 "tuning": self.tuning(),
                 "video_busy": self._video_busy,
                 "last_video_job": self.last_video_job,

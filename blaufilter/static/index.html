@@ -503,13 +503,17 @@
     return [h, m, s].map(v => String(v).padStart(2, '0')).join(':');
   }
 
-  function fmtAgo(ts) {
-    if (ts == null) return '—';
-    const sec = Math.max(0, Math.floor(Date.now() / 1000 - ts));
+  // Takes an age in seconds from the controller rather than a timestamp: the
+  // Pi's clock and this browser's clock are unrelated (no RTC, no internet on
+  // that network), so subtracting one from the other gave absurd results.
+  function fmtAge(sec) {
+    if (sec == null) return '—';
+    sec = Math.max(0, Math.floor(sec));
     if (sec < 5) return 'gerade eben';
     if (sec < 60) return `vor ${sec}s`;
     if (sec < 3600) return `vor ${Math.floor(sec / 60)} min`;
-    return `vor ${Math.floor(sec / 3600)} h`;
+    const h = Math.floor(sec / 3600), m = Math.floor((sec % 3600) / 60);
+    return `vor ${h}h ${m}m`;
   }
 
   function fmtUptime(sec) {
@@ -596,7 +600,7 @@
     healthlabel.textContent = h.label;
 
     document.getElementById('devcount').textContent = String(st.connected_devices ?? 0);
-    document.getElementById('lastcorr').textContent = fmtAgo(st.last_correction_at);
+    document.getElementById('lastcorr').textContent = fmtAge(st.last_correction_age_s);
     document.getElementById('vidlen').textContent = fmtPos(st.video_length);
     document.getElementById('uptime').textContent = fmtUptime(st.uptime_s);
 
