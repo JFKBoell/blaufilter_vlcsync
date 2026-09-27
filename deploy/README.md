@@ -284,14 +284,39 @@ das Web-UI läuft über einfaches HTTP im geschlossenen WLAN.
   etwa dem halben Abfrageabstand, im Normalbetrieb rund ±50–100 ms.
   Antwortet ein Gerät wegen einer WLAN-Wiederholung verzögert, verschlechtert
   sich **nur dessen** Genauigkeit, nicht die der anderen.
-- **Sanfte Korrektur (Standard):** Abweichungen von 0,15–3 s werden unsichtbar
-  über eine temporär um 2–8 % verstellte Abspielrate ausgeglichen — kein
-  Ruckeln, das Gerät „schwimmt" zurück auf die Master-Position.
+- **Sanfte Korrektur (Standard):** Abweichungen ab 0,15 s werden unsichtbar
+  über eine temporär um 2–15 % verstellte Abspielrate ausgeglichen — kein
+  Ruckeln, das Gerät „schwimmt" zurück auf die Master-Position. Die Stärke
+  richtet sich nach der Abweichung und ist auf etwa 10 s Angleichzeit ausgelegt.
+  Die Rate wird nur selten nachjustiert (höchstens alle 3 s, und nur bei
+  deutlicher Änderung), weil jede Änderung in VLC eine kleine Taktkorrektur ist.
 - **Seek nur als Notbremse:** Erst ab > 3 s Drift (3 Zyklen in Folge) wird
   gesprungen — ein Seek stoppt die 4K-Dekodierung sichtbar und landet je nach
   Keyframe-Abstand nicht exakt. Springt ein Gerät wiederholt kurz
-  hintereinander, verdoppelt sich seine Abkühlphase automatisch (10 s → … →
-  60 s), damit keine Ruckel-Schleife entsteht.
+  hintereinander **ohne dabei besser zu werden**, verdoppelt sich seine
+  Abkühlphase automatisch (10 s → … → 60 s), damit keine Ruckel-Schleife
+  entsteht; eine Folge von Korrekturen, die die Abweichung verkleinert, wird
+  nicht gebremst.
+- **Vorhaltezeit (`seek_lead_s`):** Ein Seek wirkt nicht im Moment des Befehls.
+  VLC leert und füllt den Dekoder neu — bei 4K HEVC rund eine Sekunde — und
+  spielt **erst dann** von der angeforderten Stelle weiter, ohne die Zeit
+  nachzuholen. Wird die *aktuelle* Master-Position gesendet, landet das Gerät
+  also genau um diese Dauer zu spät; das waren die ~2 s Versatz direkt nach
+  einem Sprung. Der Controller zielt daher auf die Stelle, an der der Master
+  nach dem Seek stehen wird, und lernt die tatsächliche Seek-Dauer pro Gerät aus
+  der Restabweichung der letzten Korrektur (Startwert 1 s, Anzeige in der
+  Gerätetabelle unter *Sprung*; `*` = noch der Startwert). Ein gemeinsamer
+  Sprung (Zufallsstelle, „von vorn") verschiebt jedes Gerät um seinen eigenen
+  Vorlauf, sodass das langsamere nicht dauerhaft hinterherhängt.
+- **Bildversatz (`offset_ms_<ID>`):** `get_time` meldet den Stand des *Inputs*,
+  nicht das, was auf dem Bildschirm zu sehen ist; dazwischen liegen Dekoder,
+  Compositor und Display, und dieser Weg ist nicht auf jedem Gerät gleich lang.
+  Eine Kameramessung ergab 300–350 ms, wo der Controller 175 ms anzeigte. Diese
+  Differenz kann der Controller nicht selbst messen — sie wird auf der
+  Debug-Seite unter *Bildversatz* je Gerät in Millisekunden eingetragen
+  (positiv = das Bild dieses Geräts läuft so weit hinter seiner Meldung her).
+  Danach rechnet der Sync in „Bildzeit": Drift-Anzeige und Sprungziel gelten für
+  das, was die Kamera sieht.
 - Am Loop-Übergang (±3 s um Anfang/Ende) sind Korrekturen unterdrückt, damit
   der versetzte Umbruch der Geräte keinen Seek-Sturm auslöst.
 - **WLAN-Toleranz:** Einzelne verzögerte/verlorene RC-Antworten (normal im
@@ -299,13 +324,14 @@ das Web-UI läuft über einfaches HTTP im geschlossenen WLAN.
   Verbindungsabriss. So setzt der Sync bei kurzen Funkstörungen nicht aus.
 
 Einstellbar in `/etc/blaufilter/config`: `drift_threshold`,
-`hysteresis_cycles`, `cooldown_s`, `rate_nudge`, `web_port`, `random_start`,
-`debug_pin`. Von Hand eingetragene Werte **überstehen ein erneutes Ausführen
-des Install-Scripts** — es schreibt nur die Schlüssel neu, die es selbst
-verwaltet (Geräte-ID, Rolle, PIN, WLAN-Angaben, Repository-Pfad).
+`hysteresis_cycles`, `cooldown_s`, `seek_lead_s`, `offset_ms_<ID>`,
+`rate_nudge`, `web_port`, `random_start`, `debug_pin`. Von Hand eingetragene
+Werte **überstehen ein erneutes Ausführen des Install-Scripts** — es schreibt
+nur die Schlüssel neu, die es selbst verwaltet (Geräte-ID, Rolle, PIN,
+WLAN-Angaben, Repository-Pfad).
 
-Die drei Werte der Driftkorrektur lassen sich außerdem im Web-UI ändern
-(Debug-Seite → *Driftkorrektur*). Sie landen in
+Die Werte der Driftkorrektur und die Bildversätze lassen sich außerdem im
+Web-UI ändern (Debug-Seite → *Driftkorrektur* und *Bildversatz*). Sie landen in
 `/opt/blaufilter/state/tuning` und haben Vorrang vor
 `/etc/blaufilter/config`. Der eigene Ort ist nötig, weil der Controller als
 normaler Benutzer läuft: `/etc/blaufilter` gehört root, und ein atomarer
@@ -316,6 +342,26 @@ Oberfläche hin.
 Ruckelt es trotzdem periodisch: prüfen, ob das Video mit kurzem
 Keyframe-Abstand (GOP ≤ 2 s) kodiert ist — Seeks landen sonst weit daneben
 und provozieren Folgekorrekturen.
+
+### Bildversatz mit der Kamera einmessen
+
+Nötig, weil die Anzeige im Web-UI nur den Input misst, nicht das Bild:
+
+1. Testvideo mit eingebrannter Zeit erzeugen (z. B. `drawtext` mit `%{pts}`),
+   auf alle Geräte verteilen und die Bildschirme nebeneinander abfilmen —
+   Zeitlupe hilft, 240 fps sind ideal.
+2. Im Web-UI die Drift-Anzeige des Geräts notieren (Debug-Seite, Spalte
+   *Drift*) und gleichzeitig den Versatz aus dem Video ablesen. Beide im
+   **gleichen Vorzeichen** lesen wie die Anzeige: `+` = das Gerät läuft dem
+   Master **voraus**, `−` = es hängt hinterher.
+3. Eintragen: `Bildversatz = angezeigt − gefilmt`. Aus 175 ms angezeigt und
+   350 ms gefilmt werden also −175 ms, wenn das Gerät voraus läuft, und
+   +175 ms, wenn es hinterherhängt (−175 − (−350)).
+   Ein positiver Wert heißt: das Bild dieses Geräts läuft so weit hinter dem
+   her, was es meldet.
+4. Übernehmen, erneut filmen, gegebenenfalls nachziehen. Der Wert ist eine
+   Hardware-Eigenschaft und bleibt gültig, solange Gerät, Anzeige und
+   Auflösung gleich bleiben.
 
 ## Wartung: `sudo blaufilter-setup`
 

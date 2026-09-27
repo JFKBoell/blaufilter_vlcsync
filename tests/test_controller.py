@@ -96,8 +96,11 @@ def test_drift_triggers_exactly_one_correction(stack):
         EmulatedPlayer(length=3600, start_position=100),
         EmulatedPlayer(length=3600, start_position=100),
     ]
-    # Force the seek path: low threshold, no smooth nudge
-    servers, controller = stack(players, drift_threshold=0.5, rate_nudge=False)
+    # Force the seek path: low threshold, no smooth nudge. The emulated players
+    # seek instantly, so no lead is needed to hit the master's position — see
+    # test_seek_lead.py for the slow-seek case.
+    servers, controller = stack(players, drift_threshold=0.5, rate_nudge=False,
+                                seek_lead_s=0.0)
 
     assert tick_until(controller, lambda: len(controller.devices) == 2)
     assert tick_until(controller,
@@ -200,7 +203,7 @@ def test_seek_cooldown_backs_off_on_rapid_recorrection(stack):
         EmulatedPlayer(length=3600, start_position=100),
     ]
     servers, controller = stack(players, drift_threshold=0.5, rate_nudge=False,
-                                cooldown_s=1.0)
+                                cooldown_s=1.0, seek_lead_s=0.0)
 
     assert tick_until(controller, lambda: len(controller.devices) == 2)
     assert tick_until(controller,

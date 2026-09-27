@@ -95,7 +95,11 @@ def create_app(controller: Controller) -> Flask:
 
     @app.get("/api/tuning")
     def get_tuning():
-        return jsonify({"tuning": controller.tuning(), "limits": bf_config.TUNING_LIMITS})
+        return jsonify({
+            "tuning": controller.tuning(),
+            "limits": bf_config.TUNING_LIMITS,
+            "offset_limit_ms": bf_config.OFFSET_LIMIT_MS,
+        })
 
     @app.post("/api/tuning")
     @require_pin

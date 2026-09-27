@@ -57,6 +57,36 @@ def test_values_outside_the_range_are_clamped_not_rejected(client):
     assert controller.cfg.drift_threshold == bf_config.TUNING_LIMITS["drift_threshold"][1]
 
 
+def test_picture_offsets_are_stored_per_device(client):
+    """Calibration from a camera measurement: device 2's picture runs 350 ms
+    behind what it reports."""
+    http, controller, tmp_path = client
+    body = http.post("/api/tuning", headers=PIN_HEADERS,
+                     json={"device_offsets_ms": {"2": 350, "3": 0}}).get_json()
+    assert body["saved"] is True
+    assert body["tuning"]["device_offsets_ms"] == {"2": 350}
+    assert controller.cfg.device_offsets_ms == {2: 350}
+    assert bf_config.read_tuning(str(tmp_path / "tuning"))["device_offsets_ms"] == {2: 350}
+
+
+def test_changing_the_threshold_keeps_the_offsets(client):
+    """The two cards on the page submit separately — one must not wipe the other."""
+    http, controller, tmp_path = client
+    http.post("/api/tuning", headers=PIN_HEADERS, json={"device_offsets_ms": {"2": 120}})
+    http.post("/api/tuning", headers=PIN_HEADERS, json={"drift_threshold": 1.0})
+    assert controller.cfg.device_offsets_ms == {2: 120}
+    assert bf_config.read_tuning(str(tmp_path / "tuning"))["device_offsets_ms"] == {2: 120}
+
+
+def test_the_seek_lead_is_a_setting_like_the_others(client):
+    http, controller, _ = client
+    body = http.post("/api/tuning", headers=PIN_HEADERS,
+                     json={"seek_lead_s": 1.8}).get_json()
+    assert body["tuning"]["seek_lead_s"] == 1.8
+    assert controller.cfg.seek_lead_s == 1.8
+    assert http.get("/api/tuning").get_json()["offset_limit_ms"] == bf_config.OFFSET_LIMIT_MS
+
+
 def test_junk_is_rejected(client):
     http, _, _ = client
     assert http.post("/api/tuning", headers=PIN_HEADERS,

@@ -294,12 +294,13 @@
     font-variant-numeric: tabular-nums; text-align: right;
   }
   .tuning em { font-style: normal; color: var(--muted); width: 1rem; }
-  #tuningbtn {
+  #tuningbtn, #offsetbtn {
     margin-top: 0.5rem; width: 100%; padding: 0.85rem 1rem; font-size: 0.95rem; text-align: left;
     border: 1px solid var(--line); border-radius: 0; cursor: pointer;
     background: transparent; color: var(--fg);
   }
-  #tuningbtn:active { background: var(--press); }
+  #tuningbtn:active, #offsetbtn:active { background: var(--press); }
+  #offsetstatus { margin-top: 1rem; font-size: 0.85rem; color: var(--muted); line-height: 1.45; }
   #tuningstatus { margin-top: 1rem; font-size: 0.85rem; color: var(--muted); line-height: 1.45; }
   .ok { color: var(--muted); }
   .fail { color: var(--fg); font-weight: 600; }
@@ -403,8 +404,8 @@
     <label>Geräte</label>
     <div class="tablewrap">
       <table>
-        <thead><tr><th>ID</th><th>Adresse</th><th>Position</th><th>Drift</th></tr></thead>
-        <tbody id="devices"><tr><td colspan="4">—</td></tr></tbody>
+        <thead><tr><th>ID</th><th>Adresse</th><th>Position</th><th>Drift</th><th>Sprung</th></tr></thead>
+        <tbody id="devices"><tr><td colspan="5">—</td></tr></tbody>
       </table>
     </div>
     <div class="actions">
@@ -428,9 +429,19 @@
         <span>Mindestabstand zweier Sprünge</span>
         <span class="row"><input type="number" id="t_cooldown" min="1" max="120" step="1"><em>s</em></span>
       </label>
+      <label class="field">
+        <span>Vorhaltezeit beim Sprung</span>
+        <span class="row"><input type="number" id="t_lead" min="0" max="5" step="0.1"><em>s</em></span>
+      </label>
       <button type="button" id="tuningbtn">Übernehmen</button>
     </div>
     <div id="tuningstatus"></div>
+  </div>
+
+  <div class="card">
+    <label>Bildversatz</label>
+    <div class="tuning" id="offsets"></div>
+    <div id="offsetstatus"></div>
   </div>
 
   <div class="card">
@@ -475,8 +486,12 @@
     drift_threshold: document.getElementById('t_drift'),
     hysteresis_cycles: document.getElementById('t_cycles'),
     cooldown_s: document.getElementById('t_cooldown'),
+    seek_lead_s: document.getElementById('t_lead'),
   };
   let tuningTouched = false;
+  const offsetsEl = document.getElementById('offsets');
+  const offsetstatus = document.getElementById('offsetstatus');
+  let offsetsTouched = false;
   const videostatus = document.getElementById('videostatus');
   const mainview = document.getElementById('mainview');
   const debugview = document.getElementById('debugview');
@@ -533,10 +548,12 @@
     return (n / 1073741824).toFixed(2) + ' GB';
   }
 
-  function driftCell(ms) {
+  function driftCell(ms, nudgePercent) {
     if (ms == null) return '<td>—</td>';
     const cls = Math.abs(ms) < 250 ? 'drift-ok' : Math.abs(ms) < 500 ? 'drift-warn' : 'drift-bad';
-    return `<td class="${cls}">${ms > 0 ? '+' : ''}${ms} ms</td>`;
+    // A running nudge explains why the number is moving without a jump
+    const nudge = nudgePercent ? ` (${nudgePercent > 0 ? '+' : ''}${nudgePercent} %)` : '';
+    return `<td class="${cls}">${ms > 0 ? '+' : ''}${ms} ms${nudge}</td>`;
   }
 
   let toastTimer = null;
@@ -650,20 +667,49 @@
       sel.value = [...sel.options].some(o => o.value === current) ? current : 'all';
     }
 
+    renderOffsets(rows, st.tuning || {});
+
     if (!rows.length) {
-      devicesEl.innerHTML = '<tr><td colspan="4">keine Kandidaten konfiguriert</td></tr>';
+      devicesEl.innerHTML = '<tr><td colspan="5">keine Kandidaten konfiguriert</td></tr>';
       return;
     }
     devicesEl.innerHTML = rows.map(d => {
       if (!d.connected) {
         return `<tr class="offline"><td>${d.id ?? '?'}` +
           `<span class="badge-off">OFFLINE</span></td>` +
-          `<td>${d.address}</td><td>—</td><td>—</td></tr>`;
+          `<td>${d.address}</td><td>—</td><td>—</td><td>—</td></tr>`;
       }
+      const lead = d.seek_lead_s == null ? '—'
+        : d.seek_lead_s.toFixed(1) + ' s' + (d.seek_lead_learned ? '' : '*');
       return `<tr><td>${d.id ?? '?'}${d.is_master ? '<span class="badge">MASTER</span>' : ''}</td>` +
         `<td>${d.address}</td><td>${fmtPos(d.position)}</td>` +
-        (d.is_master ? '<td>—</td>' : driftCell(d.drift_ms)) + '</tr>';
+        (d.is_master ? '<td>—</td>' : driftCell(d.drift_ms, d.nudge_percent)) +
+        `<td>${d.is_master ? '—' : lead}</td></tr>`;
     }).join('');
+  }
+
+  // One input per device, in milliseconds: how far this device's picture runs
+  // behind what it reports. Measured with a camera, not by the controller.
+  function renderOffsets(rows, tuning) {
+    const stored = tuning.device_offsets_ms || {};
+    const shown = rows.filter(d => d.id != null && (d.connected || stored[d.id]));
+    const html = shown.map(d =>
+      `<label class="field"><span>Gerät ${d.id}${d.is_master ? ' (Master)' : ''}</span>` +
+      `<span class="row"><input type="number" data-dev="${d.id}" ` +
+      `min="-2000" max="2000" step="10"><em>ms</em></span></label>`
+    ).join('') + '<button type="button" id="offsetbtn">Übernehmen</button>';
+
+    if (offsetsEl.dataset.shape !== html) {
+      offsetsEl.innerHTML = html;
+      offsetsEl.dataset.shape = html;
+      offsetsTouched = false;
+    }
+    if (offsetsTouched) return;
+    offsetsEl.querySelectorAll('input[data-dev]').forEach(input => {
+      if (document.activeElement !== input) {
+        input.value = stored[input.dataset.dev] ?? 0;
+      }
+    });
   }
 
   async function poll() {
@@ -802,6 +848,37 @@
       tuningstatus.innerHTML = `<span class="fail">${e.message || e}</span>`;
     } finally {
       tuningbtn.disabled = false;
+    }
+  });
+
+  offsetsEl.addEventListener('input', () => { offsetsTouched = true; });
+  offsetsEl.addEventListener('click', async (ev) => {
+    if (ev.target.id !== 'offsetbtn') return;
+    const offsets = {};
+    offsetsEl.querySelectorAll('input[data-dev]').forEach(input => {
+      offsets[input.dataset.dev] = Number(input.value || 0);
+    });
+    ev.target.disabled = true;
+    offsetstatus.textContent = 'Übernehme…';
+    try {
+      const r = await debugFetch('/api/tuning', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ device_offsets_ms: offsets }),
+      });
+      const body = await r.json().catch(() => ({}));
+      if (!r.ok) {
+        offsetstatus.innerHTML = `<span class="fail">${body.error || 'fehlgeschlagen'}</span>`;
+        return;
+      }
+      offsetsTouched = false;
+      offsetstatus.innerHTML = body.saved
+        ? '<span class="ok">Übernommen und gespeichert.</span>'
+        : `<span class="fail">${body.note}</span>`;
+    } catch (e) {
+      offsetstatus.innerHTML = `<span class="fail">${e.message || e}</span>`;
+    } finally {
+      ev.target.disabled = false;
     }
   });
 

@@ -21,8 +21,14 @@ PLAYLIST_RESPONSE = (
 class EmulatedPlayer:
     """In-memory player with rate, length, loop wrap and injectable clock skew."""
 
-    def __init__(self, length: float = 3600.0, start_position: float = 0.0, playing: bool = True):
+    def __init__(self, length: float = 3600.0, start_position: float = 0.0,
+                 playing: bool = True, seek_latency: float = 0.0):
         self.length = length
+        self.seek_latency = seek_latency
+        """How long a seek takes before playback continues from the target. Real
+        VLC flushes and refills the decoder, which on 4K HEVC costs about a
+        second, and then resumes from the commanded position — it does not catch
+        up the time it spent, so the player ends up that much behind."""
         self.rate = 1.0
         self.state = "playing" if playing else "paused"
         self.report_state_override = None
@@ -30,13 +36,21 @@ class EmulatedPlayer:
         self.volume = 256
         self._base = start_position
         self._t0 = time.time()
+        self._resume_at = 0.0
+        """End of the stall a seek causes. Kept separate from _t0 so that the
+        commands the controller sends meanwhile (it sees a frozen position and
+        offers a 'play') cannot shorten it — real VLC does not resume early
+        either."""
         self.received: List[str] = []
         self.lock = threading.Lock()
 
     def position(self) -> float:
         if self.state != "playing":
             return self._base
-        return (self._base + (time.time() - self._t0) * self.rate) % self.length
+        # While a seek is still in progress the picture stands at the target
+        # instead of running towards it.
+        elapsed = max(0.0, time.time() - max(self._t0, self._resume_at))
+        return (self._base + elapsed * self.rate) % self.length
 
     def _rebase(self):
         self._base = self.position()
@@ -45,6 +59,7 @@ class EmulatedPlayer:
     def seek(self, seconds: float):
         self._rebase()
         self._base = float(seconds) % self.length
+        self._resume_at = time.time() + self.seek_latency
 
     def set_rate(self, rate: float):
         self._rebase()
